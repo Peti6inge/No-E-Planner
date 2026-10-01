@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { planningUiFeedback } from '../lib/planningFeedback';
+import { planningAddFeedback } from '../lib/planningFeedback';
 import { Ticket } from './Ticket';
 import type { TicketData } from './Ticket';
 import type { TicketStatus } from '../lib/planningConstants';
@@ -53,9 +53,9 @@ export function Planner({
       setFocusTaskTicketId(newId);
     }
     if (addButtonRef.current) {
-      planningUiFeedback(addButtonRef.current);
+      planningAddFeedback(addButtonRef.current);
     } else {
-      planningUiFeedback({ clientX: window.innerWidth / 2, clientY: 120 });
+      planningAddFeedback({ clientX: window.innerWidth / 2, clientY: 120 });
     }
   }, [canEdit, onActionUnavailable, onAddTicket]);
 

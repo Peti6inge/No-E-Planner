@@ -11,7 +11,7 @@ import {
   moduleLabel,
   statusLabel,
 } from '../lib/planningConstants';
-import { planningUiFeedback } from '../lib/planningFeedback';
+import { planningValidateFeedback } from '../lib/planningFeedback';
 import { useAutoResizeTextarea } from '../lib/useAutoResizeTextarea';
 
 export interface TicketData {
@@ -82,11 +82,9 @@ export function Ticket({
   const handleSelectChange = <K extends keyof TicketData>(
     field: K,
     value: TicketData[K],
-    el: HTMLSelectElement,
     previous: TicketData[K],
   ) => {
     if (value === previous) return;
-    planningUiFeedback(el);
     handleUpdate({ [field]: value } as Partial<TicketData>);
   };
 
@@ -129,7 +127,7 @@ export function Ticket({
           <select
             value={ticket.status}
             onChange={(e) =>
-              handleSelectChange('status', e.target.value as TicketStatus, e.target, ticket.status)
+              handleSelectChange('status', e.target.value as TicketStatus, ticket.status)
             }
             className={selectClass}
             disabled={!canEdit}
@@ -143,7 +141,7 @@ export function Ticket({
 
           <select
             value={ticket.module}
-            onChange={(e) => handleSelectChange('module', e.target.value, e.target, ticket.module)}
+            onChange={(e) => handleSelectChange('module', e.target.value, ticket.module)}
             className={selectClass}
             disabled={!canEdit}
           >
@@ -160,7 +158,6 @@ export function Ticket({
               handleSelectChange(
                 'duration',
                 e.target.value as TicketDuration,
-                e.target,
                 ticket.duration,
               )
             }
@@ -180,7 +177,6 @@ export function Ticket({
               handleSelectChange(
                 'braining',
                 e.target.value as TicketBraining,
-                e.target,
                 ticket.braining,
               )
             }
@@ -199,7 +195,10 @@ export function Ticket({
           {ticket.status !== 'DONE' && (
             <button
               type="button"
-              onClick={() => handleUpdate({ status: 'DONE' })}
+              onClick={(e) => {
+                planningValidateFeedback(e.currentTarget);
+                handleUpdate({ status: 'DONE' });
+              }}
               className="coqli-icon-btn"
               title="Marquer comme DONE"
             >
