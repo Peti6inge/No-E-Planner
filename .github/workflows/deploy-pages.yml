@@ -38,7 +38,16 @@ jobs:
           VITE_BASE: /${{ github.event.repository.name }}/
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
           VITE_GOOGLE_API_KEY: ${{ secrets.VITE_GOOGLE_API_KEY }}
-        run: npm run build
+        run: |
+          if [ -z "$VITE_GOOGLE_CLIENT_ID" ]; then
+            echo "::error::Échec du build : le secret GitHub « VITE_GOOGLE_CLIENT_ID » est vide ou absent. Ajoutez-le dans Paramètres → Secrets and variables → Actions, puis relancez le workflow (voir README)."
+            exit 1
+          fi
+          if [ -z "$VITE_GOOGLE_API_KEY" ]; then
+            echo "::error::Échec du build : le secret GitHub « VITE_GOOGLE_API_KEY » est vide ou absent. Ajoutez-le dans Paramètres → Secrets and variables → Actions, puis relancez le workflow (voir README)."
+            exit 1
+          fi
+          npm run build
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

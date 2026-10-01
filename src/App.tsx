@@ -7,6 +7,9 @@ import {
   handleAuthClick,
   handleSignoutClick,
   initGoogleAPI,
+  syncAppendTicket,
+  syncDeleteTicket,
+  syncUpdateTicket,
 } from './services/googleSheets';
 import type { GoogleApiState } from './services/googleSheets';
 import { AlertCircle, Info, Loader2, LogIn, LogOut } from 'lucide-react';
@@ -102,7 +105,7 @@ function App() {
   const canSignIn = CLIENT_ID_CONFIGURED && googleState.gisReady;
   const canEdit = isAuthenticated && CLIENT_ID_CONFIGURED;
 
-  const handleUpdateTicket = (id: string, updates: Partial<TicketData>) => {
+  const handleUpdateTicket = async (id: string, updates: Partial<TicketData>) => {
     if (!canEdit) {
       setActionMessage(
         CLIENT_ID_CONFIGURED
@@ -111,11 +114,31 @@ function App() {
       );
       return;
     }
-    setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
-    // TODO: Sync to Google Sheets
+
+    const previous = tickets;
+    const current = previous.find((t) => t.id === id);
+    if (!current) return;
+
+    if (!current.sheetRow) {
+      setActionMessage(
+        'Cette carte n’est pas liée à une ligne Sheets. Rechargez les données après connexion.',
+      );
+      return;
+    }
+
+    const merged: TicketData = { ...current, ...updates };
+    setTickets((prev) => prev.map((t) => (t.id === id ? merged : t)));
+    setActionMessage(null);
+
+    try {
+      await syncUpdateTicket(current.sheetRow, merged);
+    } catch (error) {
+      setTickets(previous);
+      setActionMessage(error instanceof Error ? error.message : 'Échec de la mise à jour Google Sheets.');
+    }
   };
 
-  const handleDeleteTicket = (id: string) => {
+  const handleDeleteTicket = async (id: string) => {
     if (!canEdit) {
       setActionMessage(
         CLIENT_ID_CONFIGURED
@@ -124,11 +147,37 @@ function App() {
       );
       return;
     }
-    setTickets((prev) => prev.filter((t) => t.id !== id));
-    // TODO: Sync to Google Sheets
+
+    const previous = tickets;
+    const current = previous.find((t) => t.id === id);
+    if (!current) return;
+
+    if (!current.sheetRow) {
+      setActionMessage(
+        'Cette carte n’est pas liée à une ligne Sheets. Rechargez les données après connexion.',
+      );
+      return;
+    }
+
+    const deletedRow = current.sheetRow;
+    setTickets((prev) =>
+      prev
+        .filter((t) => t.id !== id)
+        .map((t) =>
+          t.sheetRow && t.sheetRow > deletedRow ? { ...t, sheetRow: t.sheetRow - 1 } : t,
+        ),
+    );
+    setActionMessage(null);
+
+    try {
+      await syncDeleteTicket(deletedRow);
+    } catch (error) {
+      setTickets(previous);
+      setActionMessage(error instanceof Error ? error.message : 'Échec de la suppression Google Sheets.');
+    }
   };
 
-  const handleAddTicket = (ticket: Omit<TicketData, 'id'>) => {
+  const handleAddTicket = async (ticket: Omit<TicketData, 'id'>) => {
     if (!canEdit) {
       setActionMessage(
         CLIENT_ID_CONFIGURED
@@ -137,9 +186,21 @@ function App() {
       );
       return;
     }
-    const newTicket = { ...ticket, id: generateId() };
+
+    const newTicket: TicketData = { ...ticket, id: generateId() };
+    const previous = tickets;
     setTickets((prev) => [newTicket, ...prev]);
-    // TODO: Sync to Google Sheets
+    setActionMessage(null);
+
+    try {
+      const { sheetRow } = await syncAppendTicket(newTicket);
+      setTickets((prev) =>
+        prev.map((t) => (t.id === newTicket.id ? { ...t, sheetRow } : t)),
+      );
+    } catch (error) {
+      setTickets(previous);
+      setActionMessage(error instanceof Error ? error.message : 'Échec de l’ajout dans Google Sheets.');
+    }
   };
 
   const onLogin = () => {

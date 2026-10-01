@@ -9,6 +9,8 @@ export interface TicketData {
   task: string;
   details: string;
   status: 'Long-terme' | 'Todo' | 'Running' | 'Done';
+  /** Ligne 1-based dans l’onglet PLANNING (donnée ; en-tête = 1). */
+  sheetRow?: number;
 }
 
 interface TicketProps {

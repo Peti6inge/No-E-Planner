@@ -89,6 +89,17 @@ GitHub Pro (or a Team/Enterprise plan). Public repos can use Pages for free.
 
 Do not commit these values. The workflow injects them at build time only.
 
+**Important — Vite intègre les variables d’environnement au moment du build**, pas au chargement du site dans le navigateur. Si vous ajoutez ou modifiez `VITE_GOOGLE_CLIENT_ID` / `VITE_GOOGLE_API_KEY` après un déploiement, le bundle publié ne contiendra pas les nouvelles valeurs tant qu’un **nouveau build** n’a pas tourné.
+
+Après avoir créé ou mis à jour ces secrets Actions :
+
+1. Ouvrez **Actions** → **Deploy to GitHub Pages** → **Run workflow** (branche `main`), **ou** poussez un commit sur `main`.
+2. Attendez la fin du job ; vérifiez ensuite `https://peti6inge.github.io/No-E-Planner/`.
+
+Sans cette relance, la connexion Google échouera (client ID absent du bundle) même si les secrets sont bien définis dans le dépôt.
+
+Dans Google Cloud Console, l’**origine JavaScript autorisée** du client OAuth Web doit inclure **`https://peti6inge.github.io`** (en plus de `http://localhost:43123` pour le dev local). Une origine limitée à localhost ne suffit pas pour le site Pages.
+
 ### 4. Allow the Pages origin in Google Cloud
 
 Add in [Google Cloud Console](https://console.cloud.google.com/):

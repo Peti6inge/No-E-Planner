@@ -31,7 +31,13 @@ export type SheetTicketRow = {
   task: string;
   details: string;
   status: 'Long-terme' | 'Todo' | 'Running' | 'Done';
+  sheetRow: number;
 };
+
+export type SheetPersistTicket = Pick<
+  SheetTicketRow,
+  'id' | 'priority' | 'module' | 'task' | 'details' | 'status'
+>;
 
 type StateListener = (state: GoogleApiState) => void;
 
@@ -457,6 +463,113 @@ const mapDurationToPriority = (raw: string): string => {
   return raw || 'Normal';
 };
 
+/** Valeurs STATUT alignées sur la feuille utilisateur (préfixe numérique). */
+export const mapStatusToSheet = (status: SheetTicketRow['status']): string => {
+  switch (status) {
+    case 'Long-terme':
+      return '0 - LONG TERME';
+    case 'Todo':
+      return '1 - TODO';
+    case 'Running':
+      return '2 - RUNNING';
+    case 'Done':
+      return '3 - DONE';
+    default:
+      return '1 - TODO';
+  }
+};
+
+/** DURATION (col. D) : priorité UI quand la colonne TYPE/PRIORITÉ est absente. */
+export const mapPriorityToDuration = (priority: string): string => {
+  const p = priority.trim().toLowerCase();
+  if (p === 'urgent' || p === 'low') return 'SHORT';
+  if (p === 'high') return 'LONG';
+  if (p === 'normal') return 'MEDIUM';
+  const upper = normalizeHeader(priority);
+  if (upper === 'LONG') return 'LONG';
+  if (upper === 'SHORT') return 'SHORT';
+  if (upper === 'MEDIUM') return 'MEDIUM';
+  return 'MEDIUM';
+};
+
+const ticketToSheetRowValues = (ticket: SheetPersistTicket): string[] => [
+  ticket.id,
+  mapStatusToSheet(ticket.status),
+  ticket.module,
+  mapPriorityToDuration(ticket.priority),
+  ticket.details,
+  ticket.task,
+];
+
+const requireWriteAccess = (): void => {
+  if (!gapiInited || !gapi?.client?.sheets) {
+    throw new Error("La lecture Google Sheets n'est pas configurée.");
+  }
+  if (!gapi?.client?.getToken?.()) {
+    throw new Error("L'authentification Google est requise pour modifier la feuille.");
+  }
+};
+
+const formatSheetWriteError = (err: unknown, action: string): string => {
+  const apiMessage = extractSheetsApiMessage(err);
+  if (apiMessage) {
+    return `${action} : ${apiMessage}`;
+  }
+  return `${action}. Vérifiez vos droits d'édition sur le classeur et reconnectez-vous si besoin.`;
+};
+
+type PlanningSheetMeta = { title: string; sheetId: number };
+
+const resolvePlanningSheetMeta = async (): Promise<PlanningSheetMeta> => {
+  if (!gapiInited || !gapi?.client?.sheets) {
+    throw new Error("La lecture Google Sheets n'est pas configurée.");
+  }
+
+  const response = await gapi.client.sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+    fields: 'sheets.properties(title,sheetId)',
+  });
+
+  const sheets: Array<{ properties?: { title?: string; sheetId?: number } }> =
+    response.result?.sheets ?? [];
+
+  const findByTitle = (title: string) =>
+    sheets.find((s) => s.properties?.title === title)?.properties;
+
+  for (const preferred of PREFERRED_SHEET_TITLES) {
+    const props = findByTitle(preferred);
+    if (props?.title && props.sheetId != null) {
+      cachedSheetTitle = props.title;
+      return { title: props.title, sheetId: props.sheetId };
+    }
+  }
+
+  const common = ['Feuille 1', 'Sheet1', 'Feuil1'];
+  for (const name of common) {
+    const props = findByTitle(name);
+    if (props?.title && props.sheetId != null) {
+      cachedSheetTitle = props.title;
+      return { title: props.title, sheetId: props.sheetId };
+    }
+  }
+
+  const first = sheets[0]?.properties;
+  if (!first?.title || first.sheetId == null) {
+    throw new Error('Aucun onglet trouvé dans le classeur Google Sheets.');
+  }
+  cachedSheetTitle = first.title;
+  return { title: first.title, sheetId: first.sheetId };
+};
+
+/** Parse la dernière ligne d'une plage A1 renvoyée par values.append (ex. 'PLANNING'!A12:F12). */
+const parseAppendedRowNumber = (updatedRange: string | undefined): number | null => {
+  if (!updatedRange) return null;
+  const match = updatedRange.match(/![A-Z]+(\d+)(?::[A-Z]+\d+)?$/i);
+  if (!match) return null;
+  const row = Number.parseInt(match[1], 10);
+  return Number.isFinite(row) ? row : null;
+};
+
 export const parseSheetRows = (values: string[][] | undefined): SheetTicketRow[] => {
   if (!values || values.length < 2) return [];
 
@@ -496,6 +609,7 @@ export const parseSheetRows = (values: string[][] | undefined): SheetTicketRow[]
       task: cell(row, col.task) || '',
       details: cell(row, col.braining) || '',
       status: mapStatus(cell(row, col.status)),
+      sheetRow: rowIndex + 2,
     };
   }).filter((t) => t.task || t.id);
 };
@@ -544,9 +658,7 @@ export const fetchSheetData = async (range: string) => {
 };
 
 export const updateSheetData = async (range: string, values: any[][]) => {
-  if (!gapiInited || !gapi?.client?.sheets || !gapi?.client?.getToken?.()) {
-    throw new Error("L'authentification Google est requise pour modifier la feuille.");
-  }
+  requireWriteAccess();
 
   try {
     const response = await gapi.client.sheets.spreadsheets.values.update({
@@ -560,6 +672,106 @@ export const updateSheetData = async (range: string, values: any[][]) => {
     return response.result;
   } catch (err) {
     console.error('Error updating data', err);
-    throw new Error("La mise à jour de la feuille Google Sheets a échoué.");
+    throw new Error(formatSheetWriteError(err, 'La mise à jour de la feuille Google Sheets a échoué'));
+  }
+};
+
+/**
+ * Met à jour une ligne existante (colonnes A:F) via spreadsheets.values.update.
+ */
+export const syncUpdateTicket = async (
+  sheetRow: number,
+  ticket: SheetPersistTicket,
+): Promise<void> => {
+  requireWriteAccess();
+  if (!Number.isInteger(sheetRow) || sheetRow < 2) {
+    throw new Error('Numéro de ligne invalide pour la mise à jour Google Sheets.');
+  }
+
+  const { title } = await resolvePlanningSheetMeta();
+  const range = buildValuesRange(title, `A${sheetRow}:F${sheetRow}`);
+
+  try {
+    await gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [ticketToSheetRowValues(ticket)] },
+    });
+  } catch (err) {
+    console.error('syncUpdateTicket failed', err);
+    throw new Error(formatSheetWriteError(err, 'Impossible de mettre à jour la ligne dans Google Sheets'));
+  }
+};
+
+/**
+ * Ajoute une ligne en fin de plage PLANNING A:F via spreadsheets.values.append.
+ * Retourne le numéro de ligne 1-based de la nouvelle entrée.
+ */
+export const syncAppendTicket = async (
+  ticket: SheetPersistTicket,
+): Promise<{ sheetRow: number }> => {
+  requireWriteAccess();
+
+  const { title } = await resolvePlanningSheetMeta();
+  const range = buildValuesRange(title, 'A:F');
+
+  try {
+    const response = await gapi.client.sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      resource: { values: [ticketToSheetRowValues(ticket)] },
+    });
+
+    const sheetRow = parseAppendedRowNumber(response.result?.updates?.updatedRange as string | undefined);
+    if (!sheetRow) {
+      throw new Error('La ligne a été ajoutée mais le numéro de ligne n’a pas pu être déterminé.');
+    }
+    return { sheetRow };
+  } catch (err) {
+    console.error('syncAppendTicket failed', err);
+    if (err instanceof Error && err.message.includes('numéro de ligne')) {
+      throw err;
+    }
+    throw new Error(formatSheetWriteError(err, 'Impossible d’ajouter la ligne dans Google Sheets'));
+  }
+};
+
+/**
+ * Supprime une ligne via spreadsheets.batchUpdate (deleteDimension).
+ */
+export const syncDeleteTicket = async (sheetRow: number): Promise<void> => {
+  requireWriteAccess();
+  if (!Number.isInteger(sheetRow) || sheetRow < 2) {
+    throw new Error('Numéro de ligne invalide pour la suppression Google Sheets.');
+  }
+
+  const { sheetId } = await resolvePlanningSheetMeta();
+  const startIndex = sheetRow - 1;
+  const endIndex = sheetRow;
+
+  try {
+    await gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      resource: {
+        requests: [
+          {
+            deleteDimension: {
+              range: {
+                sheetId,
+                dimension: 'ROWS',
+                startIndex,
+                endIndex,
+              },
+            },
+          },
+        ],
+      },
+    });
+  } catch (err) {
+    console.error('syncDeleteTicket failed', err);
+    throw new Error(formatSheetWriteError(err, 'Impossible de supprimer la ligne dans Google Sheets'));
   }
 };
