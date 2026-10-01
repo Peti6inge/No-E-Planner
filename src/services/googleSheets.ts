@@ -1,6 +1,19 @@
 declare var gapi: any;
 declare var google: any;
 
+import {
+  brainingSheetValue,
+  normalizeHeader,
+  normalizeModule,
+  parseBraining,
+  parseDuration,
+  parseStatus,
+  statusToSheet,
+  type TicketBraining,
+  type TicketDuration,
+  type TicketStatus,
+} from '../lib/planningConstants';
+
 export const SPREADSHEET_ID = '1yLNRF8ylX5qUdvpPVgzmtucmd1AISJ18rfOhEfbo0Ak';
 export const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '').trim();
 export const API_KEY = (import.meta.env.VITE_GOOGLE_API_KEY ?? '').trim();
@@ -25,18 +38,18 @@ export type GoogleApiState = {
 
 export type SheetTicketRow = {
   id: string;
-  type: string;
-  priority: string;
+  status: TicketStatus;
   module: string;
+  duration: TicketDuration;
+  braining: TicketBraining;
   task: string;
   details: string;
-  status: 'Long-terme' | 'Todo' | 'Running' | 'Done';
   sheetRow: number;
 };
 
 export type SheetPersistTicket = Pick<
   SheetTicketRow,
-  'id' | 'priority' | 'module' | 'task' | 'details' | 'status'
+  'id' | 'status' | 'module' | 'duration' | 'braining' | 'task' | 'details'
 >;
 
 type StateListener = (state: GoogleApiState) => void;
@@ -207,7 +220,6 @@ const readStoredToken = (): StoredToken | null => {
 const restoreTokenIfValid = (): boolean => {
   const stored = readStoredToken();
   if (!stored) return false;
-  // Refresh buffer: treat as expired 60s early
   if (Date.now() >= stored.expires_at - 60_000) {
     sessionStorage.removeItem(TOKEN_STORAGE_KEY);
     return false;
@@ -241,8 +253,6 @@ export const initGoogleAPI = (onStateChange: StateListener) => {
   const initialState = getInitialState();
   notify(initialState);
 
-  // A missing client ID must never reach initTokenClient. The planner can
-  // still show local data and, when configured, read a publicly shared sheet.
   if (!CLIENT_ID_CONFIGURED && !API_KEY_CONFIGURED) {
     notify({
       ...initialState,
@@ -285,7 +295,6 @@ export const initGoogleAPI = (onStateChange: StateListener) => {
             });
             return;
           }
-          // GIS returns the token object; also ensure gapi has it for Sheets calls.
           if (tokenResponse?.access_token) {
             gapi.client.setToken({
               access_token: tokenResponse.access_token,
@@ -313,10 +322,6 @@ export const initGoogleAPI = (onStateChange: StateListener) => {
         isAuthenticated: restored || Boolean(token),
         error: null,
       });
-
-      // TODO(session): GIS access tokens last ~1h. sessionStorage restore covers
-      // ordinary refresh while valid. Auto silent refresh via prompt:'' is unreliable
-      // in Cursor iframe/bridge contexts — skip it; user clicks Sign In after expiry.
     } catch (error) {
       console.error('Google API initialization failed', error);
       notify({
@@ -345,7 +350,6 @@ export const handleAuthClick = (onError?: (message: string) => void) => {
   }
 
   try {
-    // Prefer silent re-grant when possible; fall back to consent UX on first use.
     const hadGrant = Boolean(readStoredToken() || gapi.client.getToken?.());
     tokenClient.requestAccessToken({ prompt: hadGrant ? '' : 'consent' });
     return true;
@@ -389,13 +393,9 @@ export const handleSignoutClick = (
 export const escapeSheetTitleForA1 = (title: string): string =>
   `'${title.replace(/'/g, "''")}'`;
 
-export const buildValuesRange = (sheetTitle: string, a1Range = 'A1:F'): string =>
+export const buildValuesRange = (sheetTitle: string, a1Range = 'A1:G'): string =>
   `${escapeSheetTitleForA1(sheetTitle)}!${a1Range}`;
 
-/**
- * Resolve the planning tab title via spreadsheets.get.
- * Prefers PLANNING; falls back to the first sheet properties title.
- */
 export const resolveSheetTitle = async (): Promise<string> => {
   if (cachedSheetTitle) return cachedSheetTitle;
   if (!gapiInited || !gapi?.client?.sheets) {
@@ -421,7 +421,6 @@ export const resolveSheetTitle = async (): Promise<string> => {
     }
   }
 
-  // Common French/English fallbacks, then first tab.
   const common = ['Feuille 1', 'Sheet1', 'Feuil1'];
   for (const name of common) {
     const match = titles.find((t) => t === name);
@@ -439,66 +438,14 @@ export const resolveSheetTitle = async (): Promise<string> => {
   return first;
 };
 
-const normalizeHeader = (value: string): string =>
-  value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toUpperCase();
-
-const mapStatus = (raw: string): SheetTicketRow['status'] => {
-  const s = normalizeHeader(raw);
-  if (s.includes('DONE') || s.includes('TERMINE') || s.startsWith('3')) return 'Done';
-  if (s.includes('RUNNING') || s.includes('EN COURS') || s.startsWith('2')) return 'Running';
-  if (s.includes('LONG') || s.startsWith('0')) return 'Long-terme';
-  if (s.includes('TODO') || s.includes('A FAIRE') || s.startsWith('1')) return 'Todo';
-  return 'Todo';
-};
-
-const mapDurationToPriority = (raw: string): string => {
-  const d = normalizeHeader(raw);
-  if (d === 'LONG') return 'High';
-  if (d === 'MEDIUM') return 'Normal';
-  if (d === 'SHORT') return 'Low';
-  return raw || 'Normal';
-};
-
-/** Valeurs STATUT alignées sur la feuille utilisateur (préfixe numérique). */
-export const mapStatusToSheet = (status: SheetTicketRow['status']): string => {
-  switch (status) {
-    case 'Long-terme':
-      return '0 - LONG TERME';
-    case 'Todo':
-      return '1 - TODO';
-    case 'Running':
-      return '2 - RUNNING';
-    case 'Done':
-      return '3 - DONE';
-    default:
-      return '1 - TODO';
-  }
-};
-
-/** DURATION (col. D) : priorité UI quand la colonne TYPE/PRIORITÉ est absente. */
-export const mapPriorityToDuration = (priority: string): string => {
-  const p = priority.trim().toLowerCase();
-  if (p === 'urgent' || p === 'low') return 'SHORT';
-  if (p === 'high') return 'LONG';
-  if (p === 'normal') return 'MEDIUM';
-  const upper = normalizeHeader(priority);
-  if (upper === 'LONG') return 'LONG';
-  if (upper === 'SHORT') return 'SHORT';
-  if (upper === 'MEDIUM') return 'MEDIUM';
-  return 'MEDIUM';
-};
-
 const ticketToSheetRowValues = (ticket: SheetPersistTicket): string[] => [
   ticket.id,
-  mapStatusToSheet(ticket.status),
+  statusToSheet(ticket.status),
   ticket.module,
-  mapPriorityToDuration(ticket.priority),
-  ticket.details,
+  ticket.duration,
+  brainingSheetValue(ticket.braining),
   ticket.task,
+  ticket.details,
 ];
 
 const requireWriteAccess = (): void => {
@@ -561,7 +508,6 @@ const resolvePlanningSheetMeta = async (): Promise<PlanningSheetMeta> => {
   return { title: first.title, sheetId: first.sheetId };
 };
 
-/** Parse la dernière ligne d'une plage A1 renvoyée par values.append (ex. 'PLANNING'!A12:F12). */
 const parseAppendedRowNumber = (updatedRange: string | undefined): number | null => {
   if (!updatedRange) return null;
   const match = updatedRange.match(/![A-Z]+(\d+)(?::[A-Z]+\d+)?$/i);
@@ -587,47 +533,37 @@ export const parseSheetRows = (values: string[][] | undefined): SheetTicketRow[]
     status: indexOf('STATUT', 'STATUS'),
     module: indexOf('MODULE'),
     duration: indexOf('DURATION', 'DUREE', 'DURÉE'),
-    braining: indexOf('BRAINING', 'DETAILS', 'DETAIL'),
+    braining: indexOf('BRAINING'),
     task: indexOf('TACHE', 'TÂCHE', 'TASK'),
-    type: indexOf('TYPE'),
-    priority: indexOf('PRIORITE', 'PRIORITÉ', 'PRIORITY'),
+    details: indexOf('DETAILS', 'DÉTAILS', 'DETAIL'),
   };
 
   const cell = (row: string[], idx: number) =>
     idx >= 0 && idx < row.length ? String(row[idx] ?? '').trim() : '';
 
-  return values.slice(1).map((row, rowIndex) => {
-    const duration = cell(row, col.duration);
-    const explicitPriority = cell(row, col.priority);
-    const explicitType = cell(row, col.type);
-
-    return {
+  return values
+    .slice(1)
+    .map((row, rowIndex) => ({
       id: cell(row, col.id) || String(rowIndex + 1),
-      type: explicitType || 'Task',
-      priority: explicitPriority || mapDurationToPriority(duration),
-      module: cell(row, col.module) || 'OTHER',
-      task: cell(row, col.task) || '',
-      details: cell(row, col.braining) || '',
-      status: mapStatus(cell(row, col.status)),
+      status: parseStatus(cell(row, col.status)),
+      module: normalizeModule(cell(row, col.module) || 'OTHER'),
+      duration: parseDuration(cell(row, col.duration)),
+      braining: parseBraining(cell(row, col.braining)),
+      task: cell(row, col.task),
+      details: cell(row, col.details),
       sheetRow: rowIndex + 2,
-    };
-  }).filter((t) => t.task || t.id);
+    }))
+    .filter((t) => t.id || t.task);
 };
 
-/**
- * Fetch planning rows. Uses OAuth bearer token when signed in (gapi.client token);
- * otherwise falls back to the API key configured at init for public read.
- */
 export const fetchPlanningData = async (): Promise<SheetTicketRow[]> => {
   if (!gapiInited || !gapi?.client?.sheets) {
     throw new Error("La lecture Google Sheets n'est pas configurée.");
   }
 
   try {
-    // Prefer known tab PLANNING; resolveSheetTitle confirms via spreadsheets.get.
     const title = await resolveSheetTitle();
-    // Columns: ID, STATUT, MODULE, DURATION, BRAINING, TÂCHE → A:F
-    const range = buildValuesRange(title, 'A1:F');
+    const range = buildValuesRange(title, 'A1:G');
     const response = await gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range,
@@ -639,7 +575,6 @@ export const fetchPlanningData = async (): Promise<SheetTicketRow[]> => {
   }
 };
 
-/** @deprecated Prefer fetchPlanningData — kept for callers that pass an explicit range. */
 export const fetchSheetData = async (range: string) => {
   if (!gapiInited || !gapi?.client?.sheets) {
     throw new Error("La lecture Google Sheets n'est pas configurée.");
@@ -676,9 +611,6 @@ export const updateSheetData = async (range: string, values: any[][]) => {
   }
 };
 
-/**
- * Met à jour une ligne existante (colonnes A:F) via spreadsheets.values.update.
- */
 export const syncUpdateTicket = async (
   sheetRow: number,
   ticket: SheetPersistTicket,
@@ -689,7 +621,7 @@ export const syncUpdateTicket = async (
   }
 
   const { title } = await resolvePlanningSheetMeta();
-  const range = buildValuesRange(title, `A${sheetRow}:F${sheetRow}`);
+  const range = buildValuesRange(title, `A${sheetRow}:G${sheetRow}`);
 
   try {
     await gapi.client.sheets.spreadsheets.values.update({
@@ -704,17 +636,13 @@ export const syncUpdateTicket = async (
   }
 };
 
-/**
- * Ajoute une ligne en fin de plage PLANNING A:F via spreadsheets.values.append.
- * Retourne le numéro de ligne 1-based de la nouvelle entrée.
- */
 export const syncAppendTicket = async (
   ticket: SheetPersistTicket,
 ): Promise<{ sheetRow: number }> => {
   requireWriteAccess();
 
   const { title } = await resolvePlanningSheetMeta();
-  const range = buildValuesRange(title, 'A:F');
+  const range = buildValuesRange(title, 'A:G');
 
   try {
     const response = await gapi.client.sheets.spreadsheets.values.append({
@@ -739,9 +667,6 @@ export const syncAppendTicket = async (
   }
 };
 
-/**
- * Supprime une ligne via spreadsheets.batchUpdate (deleteDimension).
- */
 export const syncDeleteTicket = async (sheetRow: number): Promise<void> => {
   requireWriteAccess();
   if (!Number.isInteger(sheetRow) || sheetRow < 2) {

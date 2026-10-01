@@ -12,33 +12,13 @@ import {
   syncUpdateTicket,
 } from './services/googleSheets';
 import type { GoogleApiState } from './services/googleSheets';
-import { AlertCircle, Info, Loader2, LogIn, LogOut } from 'lucide-react';
+import { AlertCircle, Loader2, LogIn, LogOut } from 'lucide-react';
 import { Planner } from './components/Planner';
 import type { TicketData } from './components/Ticket';
+import { ParticlesCanvas } from './components/ParticlesCanvas';
+import { nextTicketId } from './lib/planningConstants';
 
-// Helper to generate a random ID for new tickets
-const generateId = () => Math.floor(1000 + Math.random() * 9000).toString();
-
-const previewTickets: TicketData[] = [
-  {
-    id: '1001',
-    type: 'Feature',
-    priority: 'High',
-    module: 'Frontend',
-    task: 'Integrate Coqli UI',
-    details: 'Port the HTML/CSS to React components.',
-    status: 'Running',
-  },
-  {
-    id: '1002',
-    type: 'Bug',
-    priority: 'Urgent',
-    module: 'Backend',
-    task: 'Fix Google Sheets Auth',
-    details: 'Users are getting 403 errors on login.',
-    status: 'Todo',
-  },
-];
+const previewTickets: TicketData[] = [];
 
 const initialGoogleState: GoogleApiState = {
   apiReady: false,
@@ -61,8 +41,6 @@ function App() {
     setIsLoading(true);
     setDataError(null);
     try {
-      // Columns from PLANNING tab: ID, STATUT, MODULE, DURATION, BRAINING, TÂCHE
-      // Range resolved as 'PLANNING'!A1:Z500 inside fetchPlanningData.
       const parsed = await fetchPlanningData();
 
       if (parsed.length > 0) {
@@ -93,7 +71,6 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- init once; loadData closes over latest setters
   }, []);
 
-  // Re-fetch when auth flips to true so the OAuth token path is used after sign-in.
   useEffect(() => {
     if (googleState.apiReady && googleState.isAuthenticated) {
       void loadData();
@@ -177,30 +154,36 @@ function App() {
     }
   };
 
-  const handleAddTicket = async (ticket: Omit<TicketData, 'id'>) => {
+  const handleAddTicket = (ticket: Omit<TicketData, 'id'>): string | null => {
     if (!canEdit) {
       setActionMessage(
         CLIENT_ID_CONFIGURED
           ? 'Connectez-vous avec Google pour ajouter une ligne.'
           : "L'ajout nécessite VITE_GOOGLE_CLIENT_ID et une connexion Google.",
       );
-      return;
+      return null;
     }
 
-    const newTicket: TicketData = { ...ticket, id: generateId() };
+    const newTicket: TicketData = { ...ticket, id: nextTicketId(tickets) };
     const previous = tickets;
     setTickets((prev) => [newTicket, ...prev]);
     setActionMessage(null);
 
-    try {
-      const { sheetRow } = await syncAppendTicket(newTicket);
-      setTickets((prev) =>
-        prev.map((t) => (t.id === newTicket.id ? { ...t, sheetRow } : t)),
-      );
-    } catch (error) {
-      setTickets(previous);
-      setActionMessage(error instanceof Error ? error.message : 'Échec de l’ajout dans Google Sheets.');
-    }
+    void (async () => {
+      try {
+        const { sheetRow } = await syncAppendTicket(newTicket);
+        setTickets((prev) =>
+          prev.map((t) => (t.id === newTicket.id ? { ...t, sheetRow } : t)),
+        );
+      } catch (error) {
+        setTickets(previous);
+        setActionMessage(
+          error instanceof Error ? error.message : 'Échec de l’ajout dans Google Sheets.',
+        );
+      }
+    })();
+
+    return newTicket.id;
   };
 
   const onLogin = () => {
@@ -226,73 +209,68 @@ function App() {
         ? "VITE_GOOGLE_CLIENT_ID n'est pas configuré. La lecture publique est tentée, mais les modifications sont désactivées."
         : !googleState.apiReady
           ? 'Connexion aux services Google en cours…'
-          : !isAuthenticated
-            ? API_KEY_CONFIGURED
+          : !isAuthenticated && !API_KEY_CONFIGURED
+            ? 'Connectez-vous pour modifier la feuille. Ajoutez VITE_GOOGLE_API_KEY pour activer la lecture publique.'
+            : !isAuthenticated
               ? 'Lecture publique disponible. Connectez-vous pour modifier la feuille.'
-              : 'Connectez-vous pour modifier la feuille. Ajoutez VITE_GOOGLE_API_KEY pour activer la lecture publique.'
-            : 'Connecté à Google. Les modifications sont disponibles.');
+              : null);
 
   const statusIsError = Boolean(dataError || googleState.error);
+  const showStatusBar = Boolean(statusMessage || isLoading || actionMessage);
 
   return (
-    <div className="h-screen bg-[#141414] text-[#ececec] flex flex-col font-mono overflow-hidden">
-      <header className="border-b border-[#2a2a2a] bg-[#1a1a1a] px-6 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-gradient-to-br from-[#67e8f9] to-[#c4b5fd] rounded-md flex items-center justify-center text-[#141414] font-bold text-lg">
-            C
-          </div>
-          <h1 className="text-xl font-bold tracking-tight">Planning Coqli</h1>
+    <div className="coqli-app h-screen text-[#ececec] flex flex-col font-mono overflow-hidden">
+      <ParticlesCanvas />
+      <div className="scanlines" aria-hidden="true" />
+
+      <header className="coqli-header shrink-0">
+        <h1 className="neon-title">No-E</h1>
+        <div className="coqli-header-auth">
+          {isAuthenticated ? (
+            <button type="button" onClick={onLogout} className="coqli-auth-btn coqli-auth-btn-out">
+              <LogOut className="w-4 h-4" />
+              Déconnexion
+            </button>
+          ) : canSignIn ? (
+            <button type="button" onClick={onLogin} className="coqli-auth-btn coqli-auth-btn-in">
+              <LogIn className="w-4 h-4" />
+              Google
+            </button>
+          ) : null}
         </div>
-        {isAuthenticated ? (
-          <button
-            onClick={onLogout}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-400 hover:bg-red-500/10 rounded-md transition-colors border border-transparent hover:border-red-500/30"
-          >
-            <LogOut className="w-4 h-4" />
-            Sign Out
-          </button>
-        ) : canSignIn ? (
-          <button
-            onClick={onLogin}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#ececec] text-[#141414] hover:bg-white rounded-md transition-colors"
-          >
-            <LogIn className="w-4 h-4" />
-            Sign In with Google
-          </button>
-        ) : null}
       </header>
 
-      <div
-        role="status"
-        className={`border-b px-6 py-2 text-xs flex items-center gap-2 shrink-0 ${
-          statusIsError
-            ? 'border-red-500/30 bg-red-500/10 text-red-300'
-            : 'border-[#2a2a2a] bg-[#181818] text-[#b4b4b4]'
-        }`}
-      >
-        {statusIsError ? <AlertCircle className="w-4 h-4 shrink-0" /> : <Info className="w-4 h-4 shrink-0" />}
-        <span>{statusMessage}</span>
-        {isLoading && <Loader2 className="w-3.5 h-3.5 animate-spin ml-auto" />}
-        {actionMessage && <span className="ml-auto text-[#fbbf24]">{actionMessage}</span>}
-      </div>
-
-      <main className="flex-1 overflow-hidden">
-        <div className="h-full">
-          <Planner
-            tickets={tickets}
-            onUpdateTicket={handleUpdateTicket}
-            onDeleteTicket={handleDeleteTicket}
-            onAddTicket={handleAddTicket}
-            canEdit={canEdit}
-            onActionUnavailable={() =>
-              setActionMessage(
-                CLIENT_ID_CONFIGURED
-                  ? 'Connectez-vous avec Google pour modifier la feuille.'
-                  : 'Configurez VITE_GOOGLE_CLIENT_ID pour activer les modifications.',
-              )
-            }
-          />
+      {showStatusBar && (
+        <div
+          role="status"
+          className={`border-b px-6 py-2 text-xs flex items-center gap-2 shrink-0 relative z-[20] ${
+            statusIsError
+              ? 'border-red-500/30 bg-red-500/10 text-red-300'
+              : 'border-[#2a2a2a] bg-[#181818] text-[#b4b4b4]'
+          }`}
+        >
+          {statusIsError && <AlertCircle className="w-4 h-4 shrink-0" />}
+          {statusMessage && <span>{statusMessage}</span>}
+          {isLoading && <Loader2 className="w-3.5 h-3.5 animate-spin ml-auto" />}
+          {actionMessage && <span className="ml-auto text-[#fbbf24]">{actionMessage}</span>}
         </div>
+      )}
+
+      <main className="flex-1 overflow-hidden relative z-[1]">
+        <Planner
+          tickets={tickets}
+          onUpdateTicket={handleUpdateTicket}
+          onDeleteTicket={handleDeleteTicket}
+          onAddTicket={handleAddTicket}
+          canEdit={canEdit}
+          onActionUnavailable={() =>
+            setActionMessage(
+              CLIENT_ID_CONFIGURED
+                ? 'Connectez-vous avec Google pour modifier la feuille.'
+                : 'Configurez VITE_GOOGLE_CLIENT_ID pour activer les modifications.',
+            )
+          }
+        />
       </main>
     </div>
   );
