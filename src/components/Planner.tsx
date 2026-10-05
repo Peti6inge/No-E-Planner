@@ -85,7 +85,7 @@ export function Planner({
   return (
     <div className="flex flex-col h-full relative z-[1]">
       <div className="coqli-filters-bar">
-        <div className="flex flex-wrap gap-2 justify-center items-center">
+        <div className="flex flex-1 min-w-0 flex-wrap gap-2 justify-center items-center">
           <FilterButton
             active={viewMode === 'All'}
             onClick={() => setViewMode('All')}
@@ -128,7 +128,7 @@ export function Planner({
           type="button"
           onClick={handleAddTicket}
           title={canEdit ? 'Ajouter un ticket (+)' : 'Connectez-vous pour ajouter des tickets'}
-          className="coqli-add-btn"
+          className="coqli-add-btn shrink-0"
         >
           <Plus size={16} />
           Ajouter
