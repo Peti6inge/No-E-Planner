@@ -12,8 +12,11 @@ function measureAutoHeight(el: HTMLTextAreaElement, maxRows: number) {
   const rowHeight = Number.isFinite(lineHeight) ? lineHeight : 21;
   const slack = rowHeight * 0.5;
 
+  const previousHeight = el.style.height;
   el.style.height = 'auto';
   const needed = el.scrollHeight;
+  el.style.height = previousHeight;
+
   const maxHeight = rowHeight * maxRows + padding + border + slack;
   const autoHeight = Math.min(needed + slack, maxHeight);
 
@@ -23,16 +26,18 @@ function measureAutoHeight(el: HTMLTextAreaElement, maxRows: number) {
 export function useAutoResizeTextarea(value: string, maxRows = MAX_AUTO_ROWS) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const userHeightRef = useRef<number | null>(null);
+  const draggingRef = useRef(false);
 
   const syncSize = useCallback(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || draggingRef.current) return;
 
     const { needed, maxHeight, autoHeight, slack } = measureAutoHeight(el, maxRows);
     const userHeight = userHeightRef.current;
     const targetHeight = userHeight != null ? Math.max(autoHeight, userHeight) : autoHeight;
 
     el.style.height = `${targetHeight}px`;
+
     const exceedsMaxRows = needed + slack > maxHeight;
     el.style.overflowY =
       exceedsMaxRows || el.scrollHeight > el.clientHeight + 2 ? 'auto' : 'hidden';
@@ -46,24 +51,35 @@ export function useAutoResizeTextarea(value: string, maxRows = MAX_AUTO_ROWS) {
     const el = ref.current;
     if (!el) return;
 
-    const onPointerUp = () => {
-      const { autoHeight } = measureAutoHeight(el, maxRows);
+    const commitDrag = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+
       const h = el.offsetHeight;
+      const { autoHeight } = measureAutoHeight(el, maxRows);
       if (h > autoHeight + 2) {
         userHeightRef.current = h;
+        el.style.height = `${h}px`;
       } else {
         userHeightRef.current = null;
+        syncSize();
       }
-      syncSize();
     };
 
-    el.addEventListener('mouseup', onPointerUp);
-    el.addEventListener('touchend', onPointerUp);
-    return () => {
-      el.removeEventListener('mouseup', onPointerUp);
-      el.removeEventListener('touchend', onPointerUp);
+    const onPointerDown = () => {
+      draggingRef.current = true;
     };
-  }, [maxRows]);
+
+    el.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointerup', commitDrag);
+    window.addEventListener('pointercancel', commitDrag);
+
+    return () => {
+      el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointerup', commitDrag);
+      window.removeEventListener('pointercancel', commitDrag);
+    };
+  }, [maxRows, syncSize]);
 
   return { ref, onInput: syncSize };
 }

@@ -292,7 +292,7 @@
   outline: none;
   caret-color: #67e8f9;
   border-radius: 0;
-  overflow-y: hidden;
+  overflow-y: auto;
   white-space: pre-wrap;
   box-sizing: border-box;
 }
