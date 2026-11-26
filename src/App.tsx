@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   API_KEY_CONFIGURED,
   CLIENT_ID_CONFIGURED,
+  fetchBrainstormData,
   fetchPlanningData,
   formatSheetReadError,
   handleAuthClick,
@@ -9,14 +10,19 @@ import {
   initGoogleAPI,
   syncAppendTicket,
   syncDeleteTicket,
+  syncReplaceBrainstorm,
   syncUpdateTicket,
 } from './services/googleSheets';
 import type { GoogleApiState } from './services/googleSheets';
 import { AlertCircle, Loader2, LogIn, LogOut } from 'lucide-react';
 import { Planner } from './components/Planner';
+import { Brainstorm } from './components/Brainstorm';
 import type { TicketData } from './components/Ticket';
 import { ParticlesCanvas } from './components/ParticlesCanvas';
 import { nextTicketId } from './lib/planningConstants';
+import type { BrainstormNode } from './lib/brainstormTreemap';
+
+type AppView = 'planner' | 'brainstorm';
 
 const previewTickets: TicketData[] = [];
 
@@ -30,14 +36,16 @@ const initialGoogleState: GoogleApiState = {
 };
 
 function App() {
+  const [view, setView] = useState<AppView>('planner');
   const [googleState, setGoogleState] = useState<GoogleApiState>(initialGoogleState);
   const [tickets, setTickets] = useState<TicketData[]>(previewTickets);
+  const [brainstormNodes, setBrainstormNodes] = useState<BrainstormNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [hasLoadedSheet, setHasLoadedSheet] = useState(false);
 
-  const loadData = async () => {
+  const loadPlanning = async () => {
     setIsLoading(true);
     setDataError(null);
     try {
@@ -61,22 +69,48 @@ function App() {
     }
   };
 
+  const loadBrainstorm = async () => {
+    setIsLoading(true);
+    setDataError(null);
+    try {
+      const parsed = await fetchBrainstormData();
+      setBrainstormNodes(parsed);
+    } catch (error) {
+      console.error('Error loading brainstorm:', error);
+      setDataError(
+        error instanceof Error
+          ? error.message
+          : formatSheetReadError(error),
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadActiveView = async () => {
+    if (view === 'brainstorm') {
+      await loadBrainstorm();
+    } else {
+      await loadPlanning();
+    }
+  };
+
   useEffect(() => {
     return initGoogleAPI((state) => {
       setGoogleState(state);
       if (state.apiReady) {
-        void loadData();
+        void loadActiveView();
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- init once; loadData closes over latest setters
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init once
   }, []);
 
   useEffect(() => {
-    if (googleState.apiReady && googleState.isAuthenticated) {
-      void loadData();
+    if (googleState.apiReady) {
+      void loadActiveView();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [googleState.isAuthenticated, googleState.apiReady]);
+  }, [googleState.isAuthenticated, googleState.apiReady, view]);
 
   const isAuthenticated = googleState.isAuthenticated;
   const canSignIn = CLIENT_ID_CONFIGURED && googleState.gisReady;
@@ -186,6 +220,33 @@ function App() {
     return newTicket.id;
   };
 
+  const handleSaveBrainstorm = async (next: BrainstormNode[]) => {
+    if (!canEdit) {
+      setActionMessage(
+        CLIENT_ID_CONFIGURED
+          ? 'Connectez-vous avec Google pour modifier le brainstorm.'
+          : 'Les modifications nécessitent VITE_GOOGLE_CLIENT_ID et une connexion Google.',
+      );
+      throw new Error('Auth required');
+    }
+
+    const previous = brainstormNodes;
+    setBrainstormNodes(next);
+    setActionMessage(null);
+
+    try {
+      await syncReplaceBrainstorm(next);
+      const refreshed = await fetchBrainstormData();
+      setBrainstormNodes(refreshed);
+    } catch (error) {
+      setBrainstormNodes(previous);
+      const message =
+        error instanceof Error ? error.message : 'Échec de la sauvegarde brainstorm.';
+      setActionMessage(message);
+      throw error;
+    }
+  };
+
   const onLogin = () => {
     handleAuthClick(setActionMessage);
   };
@@ -197,6 +258,7 @@ function App() {
       setActionMessage,
     );
     setTickets(previewTickets);
+    setBrainstormNodes([]);
     setHasLoadedSheet(false);
   };
 
@@ -224,6 +286,22 @@ function App() {
       <div className="scanlines" aria-hidden="true" />
 
       <header className="coqli-header shrink-0">
+        <div className="coqli-header-views">
+          <button
+            type="button"
+            className={`coqli-view-toggle ${view === 'planner' ? 'active' : ''}`}
+            onClick={() => setView('planner')}
+          >
+            Planning
+          </button>
+          <button
+            type="button"
+            className={`coqli-view-toggle ${view === 'brainstorm' ? 'active' : ''}`}
+            onClick={() => setView('brainstorm')}
+          >
+            Brainstorm
+          </button>
+        </div>
         <h1 className="neon-title">No-E</h1>
         <div className="coqli-header-auth">
           {isAuthenticated ? (
@@ -257,20 +335,35 @@ function App() {
       )}
 
       <main className="flex-1 overflow-hidden relative z-[1]">
-        <Planner
-          tickets={tickets}
-          onUpdateTicket={handleUpdateTicket}
-          onDeleteTicket={handleDeleteTicket}
-          onAddTicket={handleAddTicket}
-          canEdit={canEdit}
-          onActionUnavailable={() =>
-            setActionMessage(
-              CLIENT_ID_CONFIGURED
-                ? 'Connectez-vous avec Google pour modifier la feuille.'
-                : 'Configurez VITE_GOOGLE_CLIENT_ID pour activer les modifications.',
-            )
-          }
-        />
+        {view === 'planner' ? (
+          <Planner
+            tickets={tickets}
+            onUpdateTicket={handleUpdateTicket}
+            onDeleteTicket={handleDeleteTicket}
+            onAddTicket={handleAddTicket}
+            canEdit={canEdit}
+            onActionUnavailable={() =>
+              setActionMessage(
+                CLIENT_ID_CONFIGURED
+                  ? 'Connectez-vous avec Google pour modifier la feuille.'
+                  : 'Configurez VITE_GOOGLE_CLIENT_ID pour activer les modifications.',
+              )
+            }
+          />
+        ) : (
+          <Brainstorm
+            nodes={brainstormNodes}
+            canEdit={canEdit}
+            onSave={handleSaveBrainstorm}
+            onActionUnavailable={() =>
+              setActionMessage(
+                CLIENT_ID_CONFIGURED
+                  ? 'Connectez-vous avec Google pour modifier le brainstorm.'
+                  : 'Configurez VITE_GOOGLE_CLIENT_ID pour activer les modifications.',
+              )
+            }
+          />
+        )}
       </main>
     </div>
   );

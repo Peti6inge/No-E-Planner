@@ -1,6 +1,7 @@
 declare var gapi: any;
 declare var google: any;
 
+import type { BrainstormNode } from '../lib/brainstormTreemap';
 import {
   brainingSheetValue,
   normalizeHeader,
@@ -24,6 +25,9 @@ export const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 
 /** Preferred planning tab title; discovered dynamically if missing. */
 const PREFERRED_SHEET_TITLES = ['PLANNING', 'Planning', 'planning'];
+
+/** Preferred brainstorm tab title. */
+const PREFERRED_BRAINSTORM_TITLES = ['BRAINSTORM', 'Brainstorm', 'brainstorm'];
 
 const TOKEN_STORAGE_KEY = 'coqli_planner_gs_token';
 
@@ -121,6 +125,7 @@ let gisInited = false;
 let scriptPromises = new Map<string, Promise<void>>();
 let activeStateListener: StateListener | null = null;
 let cachedSheetTitle: string | null = null;
+let cachedBrainstormTitle: string | null = null;
 
 const getInitialState = (): GoogleApiState => ({
   apiReady: false,
@@ -698,5 +703,117 @@ export const syncDeleteTicket = async (sheetRow: number): Promise<void> => {
   } catch (err) {
     console.error('syncDeleteTicket failed', err);
     throw new Error(formatSheetWriteError(err, 'Impossible de supprimer la ligne dans Google Sheets'));
+  }
+};
+
+type BrainstormSheetMeta = { title: string; sheetId: number };
+
+const resolveBrainstormSheetMeta = async (): Promise<BrainstormSheetMeta> => {
+  if (!gapiInited || !gapi?.client?.sheets) {
+    throw new Error("La lecture Google Sheets n'est pas configurée.");
+  }
+
+  const response = await gapi.client.sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+    fields: 'sheets.properties(title,sheetId)',
+  });
+
+  const sheets: Array<{ properties?: { title?: string; sheetId?: number } }> =
+    response.result?.sheets ?? [];
+
+  for (const preferred of PREFERRED_BRAINSTORM_TITLES) {
+    const props = sheets.find((s) => s.properties?.title === preferred)?.properties;
+    if (props?.title && props.sheetId != null) {
+      cachedBrainstormTitle = props.title;
+      return { title: props.title, sheetId: props.sheetId };
+    }
+  }
+
+  throw new Error(
+    'Onglet BRAINSTORM introuvable dans le classeur. Créez une feuille nommée « BRAINSTORM ».',
+  );
+};
+
+export const resolveBrainstormSheetTitle = async (): Promise<string> => {
+  if (cachedBrainstormTitle) return cachedBrainstormTitle;
+  const { title } = await resolveBrainstormSheetMeta();
+  return title;
+};
+
+export const parseBrainstormRows = (values: string[][] | undefined): BrainstormNode[] => {
+  if (!values || values.length === 0) return [];
+
+  const first = values[0].map((c) => String(c ?? '').trim());
+  const looksLikeHeader =
+    normalizeHeader(first[0] ?? '') === 'id' ||
+    normalizeHeader(first[1] ?? '') === 'title' ||
+    normalizeHeader(first[1] ?? '') === 'titre';
+
+  const dataRows = looksLikeHeader ? values.slice(1) : values;
+
+  return dataRows
+    .map((row, rowIndex) => {
+      const idRaw = String(row[0] ?? '').trim();
+      const title = String(row[1] ?? '').trim();
+      const parent = String(row[2] ?? '').trim();
+      const idParsed = Number.parseInt(idRaw, 10);
+      const sheetRow = looksLikeHeader ? rowIndex + 2 : rowIndex + 1;
+      return {
+        id: Number.isFinite(idParsed) ? idParsed : rowIndex + 1,
+        title,
+        parent,
+        sheetRow,
+      };
+    })
+    .filter((n) => n.title);
+};
+
+export const fetchBrainstormData = async (): Promise<BrainstormNode[]> => {
+  if (!gapiInited || !gapi?.client?.sheets) {
+    throw new Error("La lecture Google Sheets n'est pas configurée.");
+  }
+
+  try {
+    const title = await resolveBrainstormSheetTitle();
+    const range = buildValuesRange(title, 'A1:C');
+    const response = await gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range,
+    });
+    return parseBrainstormRows(response.result?.values as string[][] | undefined);
+  } catch (err) {
+    console.error('Error fetching brainstorm data', err);
+    if (err instanceof Error && err.message.includes('BRAINSTORM')) {
+      throw err;
+    }
+    throw new Error(formatSheetReadError(err));
+  }
+};
+
+/** Remplace entièrement l’onglet BRAINSTORM (ID | TITLE | PARENT, sans en-tête). */
+export const syncReplaceBrainstorm = async (nodes: BrainstormNode[]): Promise<void> => {
+  requireWriteAccess();
+
+  const { title } = await resolveBrainstormSheetMeta();
+  const range = buildValuesRange(title, 'A:C');
+  const values = nodes.map((n) => [n.id, n.title, n.parent]);
+
+  try {
+    await gapi.client.sheets.spreadsheets.values.clear({
+      spreadsheetId: SPREADSHEET_ID,
+      range,
+    });
+    if (values.length === 0) return;
+    await gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: buildValuesRange(title, 'A1:C'),
+      valueInputOption: 'RAW',
+      resource: { values },
+    });
+  } catch (err) {
+    console.error('syncReplaceBrainstorm failed', err);
+    throw new Error(
+      formatSheetWriteError(err, 'Impossible d’enregistrer le brainstorm dans Google Sheets'),
+    );
   }
 };

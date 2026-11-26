@@ -166,6 +166,40 @@
   justify-content: center;
 }
 
+.coqli-header-views {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 4px;
+  z-index: 1;
+}
+
+.coqli-view-toggle {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8a8a8a;
+  background: transparent;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.coqli-view-toggle:hover {
+  color: #ececec;
+  border-color: #3a3a3a;
+}
+
+.coqli-view-toggle.active {
+  color: #67e8f9;
+  border-color: rgba(103, 232, 249, 0.45);
+  background: rgba(103, 232, 249, 0.08);
+}
+
 .coqli-header-auth {
   position: absolute;
   right: 16px;
@@ -328,4 +362,283 @@
   .scanlines {
     display: none;
   }
+}
+
+/* ── Brainstorm treemap (porté depuis Task-Manager) ── */
+.brainstorm-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #080b10;
+}
+
+.bs-viewport {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  cursor: default;
+  background: #080b10;
+}
+
+.bs-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  width: 1px;
+  height: 1px;
+}
+
+.bs-hint {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 20;
+  font-size: 11px;
+  color: #64748b;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 6px 10px;
+  pointer-events: none;
+}
+
+.tm-node {
+  position: absolute;
+  border-style: solid;
+  overflow: hidden;
+  transition: box-shadow 0.15s;
+}
+
+.tm-node:hover {
+  z-index: 10 !important;
+}
+
+.tm-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: relative;
+  z-index: 1;
+}
+
+.tm-header .tm-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  word-break: break-word;
+}
+
+.tm-children {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.tm-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+  font-weight: 600;
+  user-select: none;
+  overflow: hidden;
+}
+
+.tm-label .tm-title {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  text-align: center;
+  line-height: 1.3;
+  overflow: hidden;
+}
+
+.tm-bar-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  opacity: 0;
+  transition: opacity 0.15s;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 2;
+  border-radius: 4px;
+  font-size: inherit;
+}
+
+.tm-header:hover .tm-bar-overlay,
+.tm-label:hover .tm-bar-overlay {
+  opacity: 1;
+}
+
+.tm-bar-overlay .tm-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1em;
+  height: 1.1em;
+  border-radius: 0.3em;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 0.75em;
+  cursor: pointer;
+  transition: background 0.12s;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  user-select: none;
+  line-height: 1;
+}
+
+.tm-bar-overlay .tm-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.bs-fulltext {
+  position: fixed;
+  background: #1e293b;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: #e2e8f0;
+  pointer-events: none;
+  z-index: 99999;
+  max-width: 360px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  display: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  font-family: system-ui, sans-serif;
+}
+
+.bs-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 10000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.bs-dialog-overlay.open {
+  display: flex;
+}
+
+.bs-dialog {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 24px;
+  width: 420px;
+  max-width: 92vw;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  font-family: system-ui, sans-serif;
+}
+
+.bs-dialog h3 {
+  color: #f1f5f9;
+  margin-bottom: 16px;
+  font-size: 18px;
+}
+
+.bs-dialog label {
+  display: block;
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 10px 0 4px;
+  font-weight: 600;
+}
+
+.bs-dialog input,
+.bs-dialog textarea,
+.bs-dialog select {
+  width: 100%;
+  padding: 8px 10px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.bs-dialog textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.bs-dialog input:focus,
+.bs-dialog textarea:focus,
+.bs-dialog select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.bs-dialog-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+  justify-content: flex-end;
+}
+
+.bs-dialog-actions button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.bs-dialog-actions .btn-cancel {
+  background: #334155;
+  color: #94a3b8;
+}
+
+.bs-dialog-actions .btn-cancel:hover {
+  background: #475569;
+}
+
+.bs-dialog-actions .btn-save {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.bs-dialog-actions .btn-save:hover {
+  background: #2563eb;
+}
+
+.bs-dialog-actions .btn-delete {
+  background: #7f1d1d;
+  color: #fca5a5;
+  margin-right: auto;
+}
+
+.bs-dialog-actions .btn-delete:hover {
+  background: #991b1b;
+}
+
+.bs-dialog-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
