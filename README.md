@@ -5,7 +5,7 @@ A React/Vite planning board + brainstorm treemap backed by Google Sheets.
 ## Prerequisites
 
 - Node.js (v18+)
-- Accès au classeur PLANNING (onglets `PLANNING` et `BRAINSTORM`)
+- Accès au classeur PLANNING (onglets `PLANNING`, `BRAINSTORM` et `NOTES` — notes, créé à la première sauvegarde)
 
 ## Setup (recommandé : bridge Apps Script)
 

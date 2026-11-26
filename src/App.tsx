@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   API_KEY_CONFIGURED,
   BRIDGE_CONFIGURED,
   CLIENT_ID_CONFIGURED,
   fetchBrainstormData,
+  fetchNotesData,
   fetchPlanningData,
   formatSheetReadError,
   handleAuthClick,
@@ -12,18 +13,21 @@ import {
   syncAppendTicket,
   syncDeleteTicket,
   syncReplaceBrainstorm,
+  syncReplaceNotes,
   syncUpdateTicket,
 } from './services/googleSheets';
 import type { GoogleApiState } from './services/googleSheets';
 import { AlertCircle, Loader2, LogIn, LogOut } from 'lucide-react';
 import { Planner } from './components/Planner';
 import { Brainstorm } from './components/Brainstorm';
+import { Notes } from './components/Notes';
 import type { TicketData } from './components/Ticket';
 import { ParticlesCanvas } from './components/ParticlesCanvas';
 import { nextTicketId } from './lib/planningConstants';
 import type { BrainstormNode } from './lib/brainstormTreemap';
+import type { NoteTab } from './lib/notesFormat';
 
-type AppView = 'planner' | 'brainstorm';
+type AppView = 'planner' | 'brainstorm' | 'notes';
 
 const previewTickets: TicketData[] = [];
 
@@ -42,6 +46,9 @@ function App() {
   const [googleState, setGoogleState] = useState<GoogleApiState>(initialGoogleState);
   const [tickets, setTickets] = useState<TicketData[]>(previewTickets);
   const [brainstormNodes, setBrainstormNodes] = useState<BrainstormNode[]>([]);
+  const [noteTabs, setNoteTabs] = useState<NoteTab[]>([]);
+  const noteTabsRef = useRef<NoteTab[]>([]);
+  noteTabsRef.current = noteTabs;
   const [isLoading, setIsLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -89,9 +96,29 @@ function App() {
     }
   };
 
+  const loadNotes = async () => {
+    setIsLoading(true);
+    setDataError(null);
+    try {
+      const parsed = await fetchNotesData();
+      setNoteTabs(parsed);
+    } catch (error) {
+      console.error('Error loading notes:', error);
+      setDataError(
+        error instanceof Error
+          ? error.message
+          : formatSheetReadError(error),
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const loadActiveView = async () => {
     if (view === 'brainstorm') {
       await loadBrainstorm();
+    } else if (view === 'notes') {
+      await loadNotes();
     } else {
       await loadPlanning();
     }
@@ -218,6 +245,29 @@ function App() {
     return newTicket.id;
   };
 
+  const handleSaveNotes = async (next: NoteTab[]) => {
+    if (!canEdit) {
+      setActionMessage(editBlockedMessage);
+      throw new Error('Auth required');
+    }
+
+    const previous = noteTabsRef.current;
+    noteTabsRef.current = next;
+    setNoteTabs(next);
+    setActionMessage(null);
+
+    try {
+      await syncReplaceNotes(next);
+    } catch (error) {
+      noteTabsRef.current = previous;
+      setNoteTabs(previous);
+      const message =
+        error instanceof Error ? error.message : 'Échec de la sauvegarde des notes.';
+      setActionMessage(message);
+      throw error;
+    }
+  };
+
   const handleSaveBrainstorm = async (next: BrainstormNode[]) => {
     if (!canEdit) {
       setActionMessage(editBlockedMessage);
@@ -253,6 +303,7 @@ function App() {
     );
     setTickets(previewTickets);
     setBrainstormNodes([]);
+    setNoteTabs([]);
     setHasLoadedSheet(false);
   };
 
@@ -299,6 +350,13 @@ function App() {
           >
             Brainstorm
           </button>
+          <button
+            type="button"
+            className={`coqli-view-toggle ${view === 'notes' ? 'active' : ''}`}
+            onClick={() => setView('notes')}
+          >
+            Notes
+          </button>
         </div>
         <h1 className="neon-title">No-E</h1>
         <div className="coqli-header-auth">
@@ -342,11 +400,18 @@ function App() {
             canEdit={canEdit}
             onActionUnavailable={() => setActionMessage(editBlockedMessage)}
           />
-        ) : (
+        ) : view === 'brainstorm' ? (
           <Brainstorm
             nodes={brainstormNodes}
             canEdit={canEdit}
             onSave={handleSaveBrainstorm}
+            onActionUnavailable={() => setActionMessage(editBlockedMessage)}
+          />
+        ) : (
+          <Notes
+            tabs={noteTabs}
+            canEdit={canEdit}
+            onSave={handleSaveNotes}
             onActionUnavailable={() => setActionMessage(editBlockedMessage)}
           />
         )}

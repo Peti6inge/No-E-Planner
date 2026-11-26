@@ -31,7 +31,7 @@ function onFormSubmitTrigger(e) {
 }
 
 /**
- * Bridge Sheets pour No-E-Planner.
+ * Bridge Sheets pour No-E-Planner (PLANNING, BRAINSTORM, NOTES).
  *
  * Déploiement (une fois) :
  * 1. Ouvre le classeur PLANNING → Extensions → Apps Script
@@ -47,6 +47,8 @@ function onFormSubmitTrigger(e) {
 var SPREADSHEET_ID = '1yLNRF8ylX5qUdvpPVgzmtucmd1AISJ18rfOhEfbo0Ak';
 var PLANNING_TITLES = ['PLANNING', 'Planning', 'planning'];
 var BRAINSTORM_TITLES = ['BRAINSTORM', 'Brainstorm', 'brainstorm'];
+var NOTES_TITLES = ['NOTES', 'Notes', 'notes'];
+var NOTES_CELL_MAX = 50000;
 
 function doGet(e) {
   try {
@@ -94,6 +96,12 @@ function dispatch(action, payload) {
       return { ok: true, values: getBrainstormValues_() };
     case 'replaceBrainstorm':
       replaceBrainstorm_(payload.values || []);
+      return { ok: true };
+    case 'getNotes':
+      var notesPayload = getNotesValues_();
+      return { ok: true, values: notesPayload.values, missing: notesPayload.missing };
+    case 'replaceNotes':
+      replaceNotes_(payload.values || []);
       return { ok: true };
     default:
       throw new Error('Action inconnue : ' + action);
@@ -173,6 +181,76 @@ function replaceBrainstorm_(values) {
       return [row[0], row[1], row[2]];
     }),
   );
+}
+
+function notesSheet_(create) {
+  var spreadsheet = ss_();
+  for (var i = 0; i < NOTES_TITLES.length; i++) {
+    var sheet = spreadsheet.getSheetByName(NOTES_TITLES[i]);
+    if (sheet) return sheet;
+  }
+  if (!create) return null;
+  return spreadsheet.insertSheet('NOTES');
+}
+
+function getNotesValues_() {
+  var sheet = notesSheet_(false);
+  if (!sheet) return { values: [], missing: true };
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  if (lastRow < 1 || lastCol < 1) return { values: [], missing: false };
+  return {
+    values: sheet.getRange(1, 1, lastRow, lastCol).getValues(),
+    missing: false,
+  };
+}
+
+function replaceNotes_(values) {
+  if (!values || !values.length) values = [];
+  if (!Array.isArray(values)) {
+    throw new Error('values doit être un tableau de lignes.');
+  }
+
+  var maxCol = 1;
+  var rect = [];
+  for (var r = 0; r < values.length; r++) {
+    var row = values[r];
+    if (!Array.isArray(row)) {
+      throw new Error('Chaque ligne de notes doit être un tableau.');
+    }
+    if (row.length > maxCol) maxCol = row.length;
+    var copy = [];
+    for (var c = 0; c < row.length; c++) {
+      var cell = row[c] == null ? '' : String(row[c]);
+      if (cell.length > NOTES_CELL_MAX) {
+        throw new Error('Une cellule de notes dépasse ' + NOTES_CELL_MAX + ' caractères.');
+      }
+      copy.push(cell);
+    }
+    rect.push(copy);
+  }
+  for (var i = 0; i < rect.length; i++) {
+    while (rect[i].length < maxCol) rect[i].push('');
+  }
+
+  var sheet = notesSheet_(true);
+  if (sheet.getMaxColumns() < maxCol) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), maxCol - sheet.getMaxColumns());
+  }
+  var neededRows = Math.max(rect.length, 1);
+  if (sheet.getMaxRows() < neededRows) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), neededRows - sheet.getMaxRows());
+  }
+
+  var clearRows = Math.max(sheet.getLastRow(), rect.length, 1);
+  var clearCols = Math.max(sheet.getLastColumn(), maxCol, 1);
+  sheet.getRange(1, 1, clearRows, clearCols).clearContent();
+  if (!rect.length) return;
+
+  // Format texte : un « = » ou une URL reste du texte, pas une formule.
+  var writeRange = sheet.getRange(1, 1, rect.length, maxCol);
+  writeRange.setNumberFormat('@');
+  writeRange.setValues(rect);
 }
 
 function isInt_(n) {

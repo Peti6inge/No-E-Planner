@@ -14,6 +14,13 @@ import {
   type TicketDuration,
   type TicketStatus,
 } from '../lib/planningConstants';
+import {
+  NOTES_SHEET_TITLES,
+  assertNotesCellLimits,
+  notesGridToTabs,
+  tabsToNotesGrid,
+  type NoteTab,
+} from '../lib/notesFormat';
 import { BRIDGE_CONFIGURED, BRIDGE_URL, callSheetsBridge } from './sheetsBridge';
 
 export { BRIDGE_CONFIGURED, BRIDGE_URL };
@@ -446,6 +453,18 @@ export const escapeSheetTitleForA1 = (title: string): string =>
 
 export const buildValuesRange = (sheetTitle: string, a1Range = 'A1:G'): string =>
   `${escapeSheetTitleForA1(sheetTitle)}!${a1Range}`;
+
+/** 1-based column index → lettre A1 (1 = A). */
+const columnIndexToA1 = (index: number): string => {
+  let n = index;
+  let letters = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    letters = String.fromCharCode(65 + rem) + letters;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letters || 'A';
+};
 
 export const resolveSheetTitle = async (): Promise<string> => {
   if (cachedSheetTitle) return cachedSheetTitle;
@@ -940,5 +959,195 @@ export const syncReplaceBrainstorm = async (nodes: BrainstormNode[]): Promise<vo
     throw new Error(
       formatSheetWriteError(err, 'Impossible d’enregistrer le brainstorm dans Google Sheets'),
     );
+  }
+};
+
+/**
+ * Notes — lecture / écriture de la feuille NOTES.
+ * Format des cellules : src/lib/notesFormat.ts (texte, liens auto, images par URL).
+ * Ligne = onglet, colonne A = nom, colonnes suivantes = pages.
+ */
+
+type NotesSheetMeta = {
+  title: string;
+  sheetId: number;
+  rowCount: number;
+  columnCount: number;
+};
+
+const explainNotesBridge = (err: unknown): Error => {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/Action inconnue/i.test(message) && /Notes/i.test(message)) {
+    return new Error(
+      'Le bridge Apps Script ne gère pas encore les notes. Remplace Code.gs dans le classeur (Extensions → Apps Script) par apps-script/Code.gs, puis Déployer → Gérer les déploiements → nouvelle version.',
+    );
+  }
+  return err instanceof Error ? err : new Error(message);
+};
+
+const notesMetaFromProps = (
+  props: {
+    title?: string;
+    sheetId?: number;
+    gridProperties?: { rowCount?: number; columnCount?: number };
+  } | undefined,
+): NotesSheetMeta | null => {
+  if (!props?.title || props.sheetId == null) return null;
+  return {
+    title: props.title,
+    sheetId: props.sheetId,
+    rowCount: props.gridProperties?.rowCount ?? 1000,
+    columnCount: props.gridProperties?.columnCount ?? 26,
+  };
+};
+
+const resolveNotesSheetMeta = async (create: boolean): Promise<NotesSheetMeta | null> => {
+  if (!gapiInited || !gapi?.client?.sheets) {
+    throw new Error("La lecture Google Sheets n'est pas configurée.");
+  }
+
+  const response = await gapi.client.sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+    fields: 'sheets.properties(title,sheetId,gridProperties(rowCount,columnCount))',
+  });
+
+  const sheets: Array<{
+    properties?: {
+      title?: string;
+      sheetId?: number;
+      gridProperties?: { rowCount?: number; columnCount?: number };
+    };
+  }> = response.result?.sheets ?? [];
+
+  for (const preferred of NOTES_SHEET_TITLES) {
+    const meta = notesMetaFromProps(
+      sheets.find((sheet) => sheet.properties?.title === preferred)?.properties,
+    );
+    if (meta) return meta;
+  }
+
+  if (!create) return null;
+
+  const created = await gapi.client.sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SPREADSHEET_ID,
+    resource: {
+      requests: [{ addSheet: { properties: { title: 'NOTES' } } }],
+    },
+  });
+  const meta = notesMetaFromProps(created.result?.replies?.[0]?.addSheet?.properties);
+  if (!meta) {
+    throw new Error('Impossible de créer la feuille NOTES dans le classeur.');
+  }
+  return meta;
+};
+
+const writeNotesGrid = async (meta: NotesSheetMeta, values: string[][]): Promise<void> => {
+  const neededRows = Math.max(values.length, 1);
+  const neededCols = Math.max(1, ...values.map((row) => row.length), 1);
+  const requests: Array<Record<string, unknown>> = [];
+
+  if (neededCols > meta.columnCount) {
+    requests.push({
+      appendDimension: {
+        sheetId: meta.sheetId,
+        dimension: 'COLUMNS',
+        length: neededCols - meta.columnCount,
+      },
+    });
+  }
+  if (neededRows > meta.rowCount) {
+    requests.push({
+      appendDimension: {
+        sheetId: meta.sheetId,
+        dimension: 'ROWS',
+        length: neededRows - meta.rowCount,
+      },
+    });
+  }
+  if (requests.length > 0) {
+    await gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      resource: { requests },
+    });
+  }
+
+  const clearRows = Math.max(meta.rowCount, neededRows);
+  const clearCols = Math.max(meta.columnCount, neededCols);
+  await gapi.client.sheets.spreadsheets.values.clear({
+    spreadsheetId: SPREADSHEET_ID,
+    range: buildValuesRange(meta.title, `A1:${columnIndexToA1(clearCols)}${clearRows}`),
+  });
+
+  if (values.length === 0) return;
+
+  // RAW : ne pas interpréter « = » ni « + » comme des formules.
+  await gapi.client.sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: buildValuesRange(meta.title, `A1:${columnIndexToA1(neededCols)}${values.length}`),
+    valueInputOption: 'RAW',
+    resource: { values },
+  });
+};
+
+export const fetchNotesData = async (): Promise<NoteTab[]> => {
+  if (BRIDGE_CONFIGURED) {
+    try {
+      const result = await callSheetsBridge<{ ok: true; values?: unknown[][] }>('getNotes');
+      return notesGridToTabs(result.values);
+    } catch (err) {
+      console.error('Error fetching notes via bridge', err);
+      throw explainNotesBridge(err);
+    }
+  }
+
+  if (!gapiInited || !gapi?.client?.sheets) {
+    throw new Error("La lecture Google Sheets n'est pas configurée.");
+  }
+
+  try {
+    const meta = await resolveNotesSheetMeta(false);
+    if (!meta) return [];
+    const range = buildValuesRange(
+      meta.title,
+      `A1:${columnIndexToA1(meta.columnCount)}${Math.max(meta.rowCount, 1)}`,
+    );
+    const response = await gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range,
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    });
+    return notesGridToTabs(response.result?.values as unknown[][] | undefined);
+  } catch (err) {
+    console.error('Error fetching notes data', err);
+    throw new Error(formatSheetReadError(err));
+  }
+};
+
+/** Remplace la feuille NOTES. La crée si elle n’existe pas. */
+export const syncReplaceNotes = async (tabs: NoteTab[]): Promise<void> => {
+  requireWriteAccess();
+  assertNotesCellLimits(tabs);
+  const values = tabsToNotesGrid(tabs);
+
+  if (BRIDGE_CONFIGURED) {
+    try {
+      await callSheetsBridge('replaceNotes', { values });
+    } catch (err) {
+      console.error('syncReplaceNotes bridge failed', err);
+      throw explainNotesBridge(err);
+    }
+    return;
+  }
+
+  try {
+    const meta = await resolveNotesSheetMeta(true);
+    if (!meta) {
+      throw new Error('Impossible de créer la feuille NOTES dans le classeur.');
+    }
+    await writeNotesGrid(meta, values);
+  } catch (err) {
+    console.error('syncReplaceNotes failed', err);
+    if (err instanceof Error && /feuille NOTES|caractères/.test(err.message)) throw err;
+    throw new Error(formatSheetWriteError(err, 'Impossible d’enregistrer les notes dans Google Sheets'));
   }
 };
