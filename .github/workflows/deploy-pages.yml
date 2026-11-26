@@ -36,16 +36,16 @@ jobs:
           #   VITE_BASE=/ npm run build
           # or change this env in the workflow / a repo variable.
           VITE_BASE: /${{ github.event.repository.name }}/
+          VITE_SHEETS_BRIDGE_URL: ${{ secrets.VITE_SHEETS_BRIDGE_URL }}
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
           VITE_GOOGLE_API_KEY: ${{ secrets.VITE_GOOGLE_API_KEY }}
         run: |
-          if [ -z "$VITE_GOOGLE_CLIENT_ID" ]; then
-            echo "::error::Échec du build : le secret GitHub « VITE_GOOGLE_CLIENT_ID » est vide ou absent. Ajoutez-le dans Paramètres → Secrets and variables → Actions, puis relancez le workflow (voir README)."
+          if [ -z "$VITE_SHEETS_BRIDGE_URL" ] && [ -z "$VITE_GOOGLE_CLIENT_ID" ]; then
+            echo "::error::Échec du build : définissez le secret « VITE_SHEETS_BRIDGE_URL » (recommandé, voir apps-script/README.md) ou « VITE_GOOGLE_CLIENT_ID »."
             exit 1
           fi
-          if [ -z "$VITE_GOOGLE_API_KEY" ]; then
-            echo "::error::Échec du build : le secret GitHub « VITE_GOOGLE_API_KEY » est vide ou absent. Ajoutez-le dans Paramètres → Secrets and variables → Actions, puis relancez le workflow (voir README)."
-            exit 1
+          if [ -z "$VITE_SHEETS_BRIDGE_URL" ] && [ -z "$VITE_GOOGLE_API_KEY" ]; then
+            echo "::warning::Sans bridge ni VITE_GOOGLE_API_KEY, la lecture publique Sheets peut échouer."
           fi
           npm run build
 

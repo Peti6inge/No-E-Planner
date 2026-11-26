@@ -14,6 +14,9 @@ import {
   type TicketDuration,
   type TicketStatus,
 } from '../lib/planningConstants';
+import { BRIDGE_CONFIGURED, BRIDGE_URL, callSheetsBridge } from './sheetsBridge';
+
+export { BRIDGE_CONFIGURED, BRIDGE_URL };
 
 export const SPREADSHEET_ID = '1yLNRF8ylX5qUdvpPVgzmtucmd1AISJ18rfOhEfbo0Ak';
 export const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '').trim();
@@ -37,6 +40,7 @@ export type GoogleApiState = {
   isAuthenticated: boolean;
   clientIdConfigured: boolean;
   apiKeyConfigured: boolean;
+  bridgeConfigured: boolean;
   error: string | null;
 };
 
@@ -96,6 +100,12 @@ export const formatSheetReadError = (err: unknown): string => {
       'Vérifiez le nom de l’onglet dans Google Sheets.'
     );
   }
+  if (BRIDGE_CONFIGURED) {
+    return (
+      'Impossible de lire la feuille via le bridge Apps Script. ' +
+      'Vérifiez VITE_SHEETS_BRIDGE_URL et que le déploiement Web est accessible à « Tout le monde ».'
+    );
+  }
   return (
     'Impossible de lire la feuille Google Sheets. Vérifiez que VITE_GOOGLE_API_KEY est définie dans .env.local, ' +
     'que l’API Google Sheets est activée pour le même projet Google Cloud, et que la feuille est partagée ' +
@@ -133,6 +143,7 @@ const getInitialState = (): GoogleApiState => ({
   isAuthenticated: false,
   clientIdConfigured: CLIENT_ID_CONFIGURED,
   apiKeyConfigured: API_KEY_CONFIGURED,
+  bridgeConfigured: BRIDGE_CONFIGURED,
   error: null,
 });
 
@@ -258,10 +269,45 @@ export const initGoogleAPI = (onStateChange: StateListener) => {
   const initialState = getInitialState();
   notify(initialState);
 
+  // Mode bridge Apps Script : lecture + écriture sans OAuth navigateur.
+  if (BRIDGE_CONFIGURED) {
+    void (async () => {
+      try {
+        await callSheetsBridge('ping');
+        notify({
+          ...initialState,
+          apiReady: true,
+          gisReady: true,
+          isAuthenticated: true,
+          error: null,
+        });
+      } catch (error) {
+        notify({
+          ...initialState,
+          apiReady: false,
+          gisReady: true,
+          isAuthenticated: false,
+          error: error instanceof Error
+            ? error.message
+            : 'Impossible de joindre le bridge Apps Script.',
+        });
+      }
+    })();
+
+    return () => {
+      active = false;
+      if (activeStateListener === onStateChange) {
+        activeStateListener = null;
+      }
+    };
+  }
+
   if (!CLIENT_ID_CONFIGURED && !API_KEY_CONFIGURED) {
     notify({
       ...initialState,
-      error: "Configuration Google manquante : ajoutez VITE_GOOGLE_CLIENT_ID pour l'authentification.",
+      error:
+        'Configuration manquante : définissez VITE_SHEETS_BRIDGE_URL (recommandé) ' +
+        'ou VITE_GOOGLE_CLIENT_ID / VITE_GOOGLE_API_KEY.',
     });
     return () => {
       active = false;
@@ -454,6 +500,7 @@ const ticketToSheetRowValues = (ticket: SheetPersistTicket): string[] => [
 ];
 
 const requireWriteAccess = (): void => {
+  if (BRIDGE_CONFIGURED) return;
   if (!gapiInited || !gapi?.client?.sheets) {
     throw new Error("La lecture Google Sheets n'est pas configurée.");
   }
@@ -562,6 +609,16 @@ export const parseSheetRows = (values: string[][] | undefined): SheetTicketRow[]
 };
 
 export const fetchPlanningData = async (): Promise<SheetTicketRow[]> => {
+  if (BRIDGE_CONFIGURED) {
+    try {
+      const result = await callSheetsBridge<{ ok: true; values?: string[][] }>('getPlanning');
+      return parseSheetRows(result.values);
+    } catch (err) {
+      console.error('Error fetching planning data via bridge', err);
+      throw err instanceof Error ? err : new Error(formatSheetReadError(err));
+    }
+  }
+
   if (!gapiInited || !gapi?.client?.sheets) {
     throw new Error("La lecture Google Sheets n'est pas configurée.");
   }
@@ -625,6 +682,20 @@ export const syncUpdateTicket = async (
     throw new Error('Numéro de ligne invalide pour la mise à jour Google Sheets.');
   }
 
+  const values = ticketToSheetRowValues(ticket);
+
+  if (BRIDGE_CONFIGURED) {
+    try {
+      await callSheetsBridge('updateTicket', { sheetRow, values });
+    } catch (err) {
+      console.error('syncUpdateTicket bridge failed', err);
+      throw err instanceof Error
+        ? err
+        : new Error(formatSheetWriteError(err, 'Impossible de mettre à jour la ligne'));
+    }
+    return;
+  }
+
   const { title } = await resolvePlanningSheetMeta();
   const range = buildValuesRange(title, `A${sheetRow}:G${sheetRow}`);
 
@@ -633,7 +704,7 @@ export const syncUpdateTicket = async (
       spreadsheetId: SPREADSHEET_ID,
       range,
       valueInputOption: 'USER_ENTERED',
-      resource: { values: [ticketToSheetRowValues(ticket)] },
+      resource: { values: [values] },
     });
   } catch (err) {
     console.error('syncUpdateTicket failed', err);
@@ -646,6 +717,25 @@ export const syncAppendTicket = async (
 ): Promise<{ sheetRow: number }> => {
   requireWriteAccess();
 
+  const values = ticketToSheetRowValues(ticket);
+
+  if (BRIDGE_CONFIGURED) {
+    try {
+      const result = await callSheetsBridge<{ ok: true; sheetRow?: number }>('appendTicket', {
+        values,
+      });
+      if (!result.sheetRow || !Number.isInteger(result.sheetRow)) {
+        throw new Error('La ligne a été ajoutée mais le numéro de ligne n’a pas pu être déterminé.');
+      }
+      return { sheetRow: result.sheetRow };
+    } catch (err) {
+      console.error('syncAppendTicket bridge failed', err);
+      throw err instanceof Error
+        ? err
+        : new Error(formatSheetWriteError(err, 'Impossible d’ajouter la ligne'));
+    }
+  }
+
   const { title } = await resolvePlanningSheetMeta();
   const range = buildValuesRange(title, 'A:G');
 
@@ -655,7 +745,7 @@ export const syncAppendTicket = async (
       range,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
-      resource: { values: [ticketToSheetRowValues(ticket)] },
+      resource: { values: [values] },
     });
 
     const sheetRow = parseAppendedRowNumber(response.result?.updates?.updatedRange as string | undefined);
@@ -676,6 +766,18 @@ export const syncDeleteTicket = async (sheetRow: number): Promise<void> => {
   requireWriteAccess();
   if (!Number.isInteger(sheetRow) || sheetRow < 2) {
     throw new Error('Numéro de ligne invalide pour la suppression Google Sheets.');
+  }
+
+  if (BRIDGE_CONFIGURED) {
+    try {
+      await callSheetsBridge('deleteTicket', { sheetRow });
+    } catch (err) {
+      console.error('syncDeleteTicket bridge failed', err);
+      throw err instanceof Error
+        ? err
+        : new Error(formatSheetWriteError(err, 'Impossible de supprimer la ligne'));
+    }
+    return;
   }
 
   const { sheetId } = await resolvePlanningSheetMeta();
@@ -769,6 +871,16 @@ export const parseBrainstormRows = (values: string[][] | undefined): BrainstormN
 };
 
 export const fetchBrainstormData = async (): Promise<BrainstormNode[]> => {
+  if (BRIDGE_CONFIGURED) {
+    try {
+      const result = await callSheetsBridge<{ ok: true; values?: string[][] }>('getBrainstorm');
+      return parseBrainstormRows(result.values);
+    } catch (err) {
+      console.error('Error fetching brainstorm data via bridge', err);
+      throw err instanceof Error ? err : new Error(formatSheetReadError(err));
+    }
+  }
+
   if (!gapiInited || !gapi?.client?.sheets) {
     throw new Error("La lecture Google Sheets n'est pas configurée.");
   }
@@ -794,9 +906,22 @@ export const fetchBrainstormData = async (): Promise<BrainstormNode[]> => {
 export const syncReplaceBrainstorm = async (nodes: BrainstormNode[]): Promise<void> => {
   requireWriteAccess();
 
+  const values = nodes.map((n) => [n.id, n.title, n.parent]);
+
+  if (BRIDGE_CONFIGURED) {
+    try {
+      await callSheetsBridge('replaceBrainstorm', { values });
+    } catch (err) {
+      console.error('syncReplaceBrainstorm bridge failed', err);
+      throw err instanceof Error
+        ? err
+        : new Error(formatSheetWriteError(err, 'Impossible d’enregistrer le brainstorm'));
+    }
+    return;
+  }
+
   const { title } = await resolveBrainstormSheetMeta();
   const range = buildValuesRange(title, 'A:C');
-  const values = nodes.map((n) => [n.id, n.title, n.parent]);
 
   try {
     await gapi.client.sheets.spreadsheets.values.clear({

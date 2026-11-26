@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   API_KEY_CONFIGURED,
+  BRIDGE_CONFIGURED,
   CLIENT_ID_CONFIGURED,
   fetchBrainstormData,
   fetchPlanningData,
@@ -32,6 +33,7 @@ const initialGoogleState: GoogleApiState = {
   isAuthenticated: false,
   clientIdConfigured: CLIENT_ID_CONFIGURED,
   apiKeyConfigured: API_KEY_CONFIGURED,
+  bridgeConfigured: BRIDGE_CONFIGURED,
   error: null,
 };
 
@@ -60,7 +62,7 @@ function App() {
     } catch (error) {
       console.error('Error loading data:', error);
       setDataError(
-        error instanceof Error && error.message.includes('Impossible de lire la feuille')
+        error instanceof Error
           ? error.message
           : formatSheetReadError(error),
       );
@@ -113,16 +115,20 @@ function App() {
   }, [googleState.isAuthenticated, googleState.apiReady, view]);
 
   const isAuthenticated = googleState.isAuthenticated;
-  const canSignIn = CLIENT_ID_CONFIGURED && googleState.gisReady;
-  const canEdit = isAuthenticated && CLIENT_ID_CONFIGURED;
+  const canSignIn = !BRIDGE_CONFIGURED && CLIENT_ID_CONFIGURED && googleState.gisReady;
+  const canEdit = BRIDGE_CONFIGURED
+    ? googleState.apiReady
+    : isAuthenticated && CLIENT_ID_CONFIGURED;
+
+  const editBlockedMessage = BRIDGE_CONFIGURED
+    ? 'Le bridge Apps Script n’est pas prêt. Vérifiez VITE_SHEETS_BRIDGE_URL.'
+    : CLIENT_ID_CONFIGURED
+      ? 'Connectez-vous avec Google pour modifier la feuille.'
+      : 'Configurez VITE_SHEETS_BRIDGE_URL (recommandé) ou VITE_GOOGLE_CLIENT_ID.';
 
   const handleUpdateTicket = async (id: string, updates: Partial<TicketData>) => {
     if (!canEdit) {
-      setActionMessage(
-        CLIENT_ID_CONFIGURED
-          ? 'Connectez-vous avec Google pour modifier la feuille.'
-          : 'Les modifications nécessitent VITE_GOOGLE_CLIENT_ID et une connexion Google.',
-      );
+      setActionMessage(editBlockedMessage);
       return;
     }
 
@@ -132,7 +138,7 @@ function App() {
 
     if (!current.sheetRow) {
       setActionMessage(
-        'Cette carte n’est pas liée à une ligne Sheets. Rechargez les données après connexion.',
+        'Cette carte n’est pas liée à une ligne Sheets. Rechargez les données.',
       );
       return;
     }
@@ -145,17 +151,13 @@ function App() {
       await syncUpdateTicket(current.sheetRow, merged);
     } catch (error) {
       setTickets(previous);
-      setActionMessage(error instanceof Error ? error.message : 'Échec de la mise à jour Google Sheets.');
+      setActionMessage(error instanceof Error ? error.message : 'Échec de la mise à jour.');
     }
   };
 
   const handleDeleteTicket = async (id: string) => {
     if (!canEdit) {
-      setActionMessage(
-        CLIENT_ID_CONFIGURED
-          ? 'Connectez-vous avec Google pour supprimer une ligne.'
-          : 'La suppression nécessite VITE_GOOGLE_CLIENT_ID et une connexion Google.',
-      );
+      setActionMessage(editBlockedMessage);
       return;
     }
 
@@ -165,7 +167,7 @@ function App() {
 
     if (!current.sheetRow) {
       setActionMessage(
-        'Cette carte n’est pas liée à une ligne Sheets. Rechargez les données après connexion.',
+        'Cette carte n’est pas liée à une ligne Sheets. Rechargez les données.',
       );
       return;
     }
@@ -184,17 +186,13 @@ function App() {
       await syncDeleteTicket(deletedRow);
     } catch (error) {
       setTickets(previous);
-      setActionMessage(error instanceof Error ? error.message : 'Échec de la suppression Google Sheets.');
+      setActionMessage(error instanceof Error ? error.message : 'Échec de la suppression.');
     }
   };
 
   const handleAddTicket = (ticket: Omit<TicketData, 'id'>): string | null => {
     if (!canEdit) {
-      setActionMessage(
-        CLIENT_ID_CONFIGURED
-          ? 'Connectez-vous avec Google pour ajouter une ligne.'
-          : "L'ajout nécessite VITE_GOOGLE_CLIENT_ID et une connexion Google.",
-      );
+      setActionMessage(editBlockedMessage);
       return null;
     }
 
@@ -212,7 +210,7 @@ function App() {
       } catch (error) {
         setTickets(previous);
         setActionMessage(
-          error instanceof Error ? error.message : 'Échec de l’ajout dans Google Sheets.',
+          error instanceof Error ? error.message : 'Échec de l’ajout.',
         );
       }
     })();
@@ -222,11 +220,7 @@ function App() {
 
   const handleSaveBrainstorm = async (next: BrainstormNode[]) => {
     if (!canEdit) {
-      setActionMessage(
-        CLIENT_ID_CONFIGURED
-          ? 'Connectez-vous avec Google pour modifier le brainstorm.'
-          : 'Les modifications nécessitent VITE_GOOGLE_CLIENT_ID et une connexion Google.',
-      );
+      setActionMessage(editBlockedMessage);
       throw new Error('Auth required');
     }
 
@@ -265,17 +259,21 @@ function App() {
   const statusMessage =
     dataError ??
     googleState.error ??
-    (!CLIENT_ID_CONFIGURED && !API_KEY_CONFIGURED
-      ? 'Configuration Google manquante. Le tableau reste disponible en aperçu local.'
-      : !CLIENT_ID_CONFIGURED
-        ? "VITE_GOOGLE_CLIENT_ID n'est pas configuré. La lecture publique est tentée, mais les modifications sont désactivées."
-        : !googleState.apiReady
-          ? 'Connexion aux services Google en cours…'
-          : !isAuthenticated && !API_KEY_CONFIGURED
-            ? 'Connectez-vous pour modifier la feuille. Ajoutez VITE_GOOGLE_API_KEY pour activer la lecture publique.'
-            : !isAuthenticated
-              ? 'Lecture publique disponible. Connectez-vous pour modifier la feuille.'
-              : null);
+    (BRIDGE_CONFIGURED
+      ? !googleState.apiReady
+        ? 'Connexion au bridge Apps Script…'
+        : null
+      : !CLIENT_ID_CONFIGURED && !API_KEY_CONFIGURED
+        ? 'Configuration manquante : définissez VITE_SHEETS_BRIDGE_URL (voir apps-script/).'
+        : !CLIENT_ID_CONFIGURED
+          ? "VITE_GOOGLE_CLIENT_ID n'est pas configuré. La lecture publique est tentée, mais les modifications sont désactivées."
+          : !googleState.apiReady
+            ? 'Connexion aux services Google en cours…'
+            : !isAuthenticated && !API_KEY_CONFIGURED
+              ? 'Connectez-vous pour modifier la feuille. Ajoutez VITE_GOOGLE_API_KEY pour activer la lecture publique.'
+              : !isAuthenticated
+                ? 'Lecture publique disponible. Connectez-vous pour modifier la feuille.'
+                : null);
 
   const statusIsError = Boolean(dataError || googleState.error);
   const showStatusBar = Boolean(statusMessage || isLoading || actionMessage);
@@ -304,12 +302,12 @@ function App() {
         </div>
         <h1 className="neon-title">No-E</h1>
         <div className="coqli-header-auth">
-          {isAuthenticated ? (
+          {!BRIDGE_CONFIGURED && isAuthenticated ? (
             <button type="button" onClick={onLogout} className="coqli-auth-btn coqli-auth-btn-out">
               <LogOut className="w-4 h-4" />
               Déconnexion
             </button>
-          ) : canSignIn ? (
+          ) : !BRIDGE_CONFIGURED && canSignIn ? (
             <button type="button" onClick={onLogin} className="coqli-auth-btn coqli-auth-btn-in">
               <LogIn className="w-4 h-4" />
               Google
@@ -342,26 +340,14 @@ function App() {
             onDeleteTicket={handleDeleteTicket}
             onAddTicket={handleAddTicket}
             canEdit={canEdit}
-            onActionUnavailable={() =>
-              setActionMessage(
-                CLIENT_ID_CONFIGURED
-                  ? 'Connectez-vous avec Google pour modifier la feuille.'
-                  : 'Configurez VITE_GOOGLE_CLIENT_ID pour activer les modifications.',
-              )
-            }
+            onActionUnavailable={() => setActionMessage(editBlockedMessage)}
           />
         ) : (
           <Brainstorm
             nodes={brainstormNodes}
             canEdit={canEdit}
             onSave={handleSaveBrainstorm}
-            onActionUnavailable={() =>
-              setActionMessage(
-                CLIENT_ID_CONFIGURED
-                  ? 'Connectez-vous avec Google pour modifier le brainstorm.'
-                  : 'Configurez VITE_GOOGLE_CLIENT_ID pour activer les modifications.',
-              )
-            }
+            onActionUnavailable={() => setActionMessage(editBlockedMessage)}
           />
         )}
       </main>
