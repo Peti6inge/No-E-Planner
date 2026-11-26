@@ -1,6 +1,6 @@
 # Bridge Apps Script
 
-Proxy lecture/écriture du classeur PLANNING (onglets `PLANNING` + `BRAINSTORM`) **sans OAuth dans le navigateur**.
+Proxy lecture/écriture du classeur PLANNING (onglets `PLANNING`, `BRAINSTORM` et `NOTES`) **sans OAuth dans le navigateur**.
 
 ## Déploiement (une fois)
 
