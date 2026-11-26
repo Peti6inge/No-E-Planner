@@ -1,3 +1,35 @@
+function onFormSubmitTrigger(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetCible = ss.getSheetByName('PLANNING');
+
+  var namedValues = e.namedValues;
+
+  var statut = namedValues['Statut'] ? namedValues['Statut'][0] : '1 - TODO';
+  var module = namedValues['Module'] ? namedValues['Module'][0] : 'OTHER';
+  var duration = namedValues['Duration'] ? namedValues['Duration'][0] : 'MEDIUM';
+  var tache = namedValues['Tâche'] ? namedValues['Tâche'][0] : '';
+
+  var nextId = 1;
+  var lastRowCible = sheetCible.getLastRow();
+
+  if (lastRowCible > 1) {
+    var idValues = sheetCible.getRange(2, 1, lastRowCible - 1, 1).getValues();
+    var idSet = {};
+    for (var i = 0; i < idValues.length; i++) {
+      var val = parseInt(idValues[i][0], 10);
+      if (!isNaN(val)) {
+        idSet[val] = true;
+      }
+    }
+    while (idSet[nextId]) {
+      nextId++;
+    }
+  }
+
+  var nouvelleLigne = [nextId, statut, module, duration, tache];
+  sheetCible.appendRow(nouvelleLigne);
+}
+
 /**
  * Bridge Sheets pour No-E-Planner.
  *
