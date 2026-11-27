@@ -37,12 +37,15 @@ function onFormSubmitTrigger(e) {
  * 1. Ouvre le classeur PLANNING → Extensions → Apps Script
  * 2. Colle ce fichier (remplace Code.gs) et apps-script/appsscript.json
  *    (scopes Drive + Sheets, sinon DriveApp.getFileById est refusé)
- * 3. Déployer → Nouveau déploiement → Type : Application Web
+ * 3. Dans l’éditeur : choisir authorizeDriveForNotes → Exécuter → accepter Drive
+ *    (compte = celui du déploiement). Sinon le Web App garde l’ancien jeton.
+ * 4. Déployer → Nouveau déploiement → Type : Application Web
  *    - Exécuter en tant que : Moi
  *    - Qui peut y accéder : Tout le monde
- * 4. Copie l’URL /exec dans VITE_SHEETS_BRIDGE_URL (.env.local + secret GitHub)
+ * 5. Copie l’URL /exec dans VITE_SHEETS_BRIDGE_URL (.env.local + secret GitHub)
  *
  * Après chaque modification du script : Déployer → Gérer les déploiements → ✎ → Nouvelle version.
+ * Après un scope Drive ajouté : relancer authorizeDriveForNotes, puis une nouvelle version.
  */
 
 var SPREADSHEET_ID = '1yLNRF8ylX5qUdvpPVgzmtucmd1AISJ18rfOhEfbo0Ak';
@@ -285,6 +288,25 @@ function notesImagesFolder_(create) {
   var created = parent.createFolder(NOTES_IMAGES_FOLDER);
   props.setProperty('NOTES_IMAGES_FOLDER_ID', created.getId());
   return created;
+}
+
+/**
+ * À lancer une fois dans l’éditeur, avec le compte qui déploie le Web App,
+ * après avoir ajouté le scope Drive. Le consentement OAuth se fait ici :
+ * une nouvelle version seule ne rafraîchit pas le jeton.
+ * Crée puis met à la corbeille un fichier test dans NOTES-IMAGES.
+ * Ensuite seulement : Déployer → Gérer les déploiements → nouvelle version.
+ */
+function authorizeDriveForNotes() {
+  var folder = notesImagesFolder_(true);
+  var blob = Utilities.newBlob(
+    'Test d’autorisation Drive. Ce fichier est mis à la corbeille tout de suite.',
+    'text/plain',
+    'authorize-drive-test.txt'
+  );
+  var file = folder.createFile(blob);
+  file.setTrashed(true);
+  Logger.log('Drive autorisé. Dossier ' + folder.getName() + ' : ' + folder.getId());
 }
 
 function fileInFolder_(file, folder) {

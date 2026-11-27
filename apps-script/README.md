@@ -7,18 +7,18 @@ Proxy lecture/écriture du classeur PLANNING (onglets `PLANNING`, `BRAINSTORM` e
 1. Ouvre le [classeur PLANNING](https://docs.google.com/spreadsheets/d/1yLNRF8ylX5qUdvpPVgzmtucmd1AISJ18rfOhEfbo0Ak/edit).
 2. **Extensions → Apps Script**.
 3. Colle le contenu de [`Code.gs`](./Code.gs) (remplace le fichier par défaut).
-4. Colle le manifeste [`appsscript.json`](./appsscript.json) — voir [Manifeste](#manifeste-scopes) ci-dessous. Sans les scopes Drive, `DriveApp.getFileById` répond « Vous n'êtes pas autorisé à appeler DriveApp.getFileById ».
-5. **Déployer → Nouveau déploiement** :
+4. Colle le manifeste [`appsscript.json`](./appsscript.json) — voir [Manifeste](#manifeste-scopes) ci-dessous.
+5. Dans l’éditeur, choisis `authorizeDriveForNotes` → **Exécuter**, avec le compte qui déploiera le Web App. Accepte l’accès Drive.
+6. **Déployer → Nouveau déploiement** :
    - Type : **Application Web**
    - Description : `no-e-planner-bridge`
    - Exécuter en tant que : **Moi**
    - Qui peut y accéder : **Tout le monde**
-6. Autorise le compte Google quand Google le demande.
 7. Copie l’URL qui se termine par `/exec`.
 
 ## Manifeste (scopes)
 
-Le Web App n’hérite pas tout seul du droit Drive. Il faut le déclarer dans le manifeste, **puis** publier une nouvelle version et ré-autoriser.
+Le scope dans `appsscript.json` ne suffit pas. Le Web App garde le jeton OAuth de la dernière autorisation. Une nouvelle version déployée sans avoir ré-accepté Drive renvoie encore « Vous n'êtes pas autorisé à appeler DriveApp.Folder.createFile » (ou `DriveApp.getFileById`).
 
 1. Éditeur Apps Script → **Paramètres du projet** (engrenage) → cocher **Afficher le fichier manifeste « appsscript.json » dans l’éditeur**.
 2. Ouvrir `appsscript.json` et coller [`appsscript.json`](./appsscript.json). Scopes :
@@ -28,8 +28,10 @@ Le Web App n’hérite pas tout seul du droit Drive. Il faut le déclarer dans l
    - `https://www.googleapis.com/auth/script.storage` — mémoriser l’id du dossier dans les propriétés du script
 
 3. Enregistrer.
-4. **Déployer → Gérer les déploiements → ✎ → Nouvelle version**.
-5. Ré-autoriser : dans l’éditeur, exécuter une fois une fonction qui touche Drive (`uploadNoteImage` ou le chemin de `getNoteImage`), **ou** rouvrir le flux OAuth du déploiement quand Google le redemande. Une nouvelle version sans cette autorisation laisse l’erreur « Vous n'êtes pas autorisé à appeler DriveApp.getFileById ».
+4. Dans la liste des fonctions, choisir **`authorizeDriveForNotes`** → **Exécuter**. Le compte doit être celui du déploiement (« Exécuter en tant que : Moi »). Accepter l’écran Google (accès Drive). La fonction crée le dossier si besoin, y dépose un fichier test, puis le met à la corbeille. Le journal d’exécution affiche l’id du dossier.
+5. **Ensuite seulement** : **Déployer → Gérer les déploiements → ✎ → Nouvelle version**.
+
+Le dossier peut aussi être créé à la main : nom exact `NOTES-IMAGES`, au même niveau que le classeur PLANNING. Pour le forcer, propriété de script `NOTES_IMAGES_FOLDER_ID` = l’id du dossier (Paramètres du projet → Propriétés du script). Sinon le script le retrouve par le nom, à côté du classeur, et enregistre l’id.
 
 ## Brancher le front
 
@@ -61,7 +63,7 @@ Le collage (Ctrl/Cmd+V) envoie l’image au bridge, action `uploadNoteImage` (`m
 
 Le clic sur `(image)` appelle `getNoteImage` (`fileId`) et affiche le blob dans une fenêtre.
 
-Après un collage qui échoue avec « Vous n'êtes pas autorisé à appeler DriveApp.getFileById » : le manifeste ci-dessus n’est pas encore sur le déploiement. Coller les scopes, nouvelle version, puis ré-autoriser.
+Si le collage répond « Vous n'êtes pas autorisé à appeler DriveApp.Folder.createFile » alors que le scope `drive` est déjà dans le manifeste : le jeton du déployeur n’a pas été rafraîchi. **Exécuter** `authorizeDriveForNotes` dans l’éditeur, accepter, **puis** publier une nouvelle version.
 
 ## Après une modif du script
 
