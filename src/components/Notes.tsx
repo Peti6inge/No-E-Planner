@@ -1,13 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ImagePlus, Pencil, Plus, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
+import { NOTES_CELL_MAX, NOTES_PAGE_MARGIN_LINES, type NoteTab } from '../lib/notesFormat';
 import {
-  NOTES_CELL_MAX,
-  NOTES_PAGE_MARGIN_LINES,
-  parseNoteCell,
-  safeHttpUrl,
-  type NoteTab,
-  type NoteToken,
-} from '../lib/notesFormat';
+  captureEditorRange,
+  clipboardImage,
+  fillNoteEditor,
+  insertNoteChip,
+  insertPlainText,
+  readNoteEditor,
+} from '../lib/noteEditorDom';
+import { fetchNoteImage, uploadNoteImage } from '../services/googleSheets';
 
 interface NotesProps {
   tabs: NoteTab[];
@@ -20,32 +22,53 @@ const marginStyle = {
   ['--notes-margin-lines' as string]: String(NOTES_PAGE_MARGIN_LINES),
 };
 
-function NoteRichText({ source }: { source: string }) {
-  const tokens = parseNoteCell(source);
-  if (tokens.length === 0 || tokens.every((token) => token.type === 'text' && token.text.trim() === '')) {
-    return <span className="notes-placeholder">Page vide</span>;
-  }
-  return (
-    <>
-      {tokens.map((token, index) => (
-        <NoteTokenView key={index} token={token} />
-      ))}
-    </>
-  );
-}
+function NoteLightbox({ fileId, onClose }: { fileId: string; onClose: () => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-function NoteTokenView({ token }: { token: NoteToken }) {
-  if (token.type === 'image') {
-    return <img src={token.src} alt={token.alt} className="notes-inline-img" />;
-  }
-  if (token.type === 'link') {
-    return (
-      <a href={token.href} target="_blank" rel="noopener noreferrer">
-        {token.text}
-      </a>
-    );
-  }
-  return <span>{token.text}</span>;
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    void fetchNoteImage(fileId)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Image impossible à charger.');
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [fileId]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="notes-lightbox" role="dialog" aria-modal="true" aria-label="Image" onClick={onClose}>
+      <button type="button" className="notes-lightbox-close" onClick={onClose}>
+        Fermer
+      </button>
+      {error && <p className="notes-lightbox-status">{error}</p>}
+      {!error && !url && <p className="notes-lightbox-status">Chargement…</p>}
+      {url && (
+        <img
+          src={url}
+          alt=""
+          onClick={(event) => event.stopPropagation()}
+        />
+      )}
+    </div>
+  );
 }
 
 function NotePage({
@@ -55,6 +78,7 @@ function NotePage({
   busy,
   onCommit,
   onDelete,
+  onOpenImage,
   onActionUnavailable,
 }: {
   pageIndex: number;
@@ -63,124 +87,68 @@ function NotePage({
   busy: boolean;
   onCommit: (text: string) => void;
   onDelete: () => void;
+  onOpenImage: (fileId: string) => void;
   onActionUnavailable: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const [imageUrl, setImageUrl] = useState('');
-  const [formError, setFormError] = useState<string | null>(null);
-  const areaRef = useRef<HTMLTextAreaElement>(null);
-  const selectionRef = useRef({ start: 0, end: 0 });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const renderedSource = useRef<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   useLayoutEffect(() => {
-    if (!editing) return;
-    const el = areaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
-  }, [draft, editing]);
-
-  useLayoutEffect(() => {
-    if (editing) areaRef.current?.focus();
-  }, [editing]);
-
-  const rememberSelection = () => {
-    const el = areaRef.current;
-    if (!el) return;
-    selectionRef.current = {
-      start: el.selectionStart ?? draft.length,
-      end: el.selectionEnd ?? draft.length,
-    };
-  };
-
-  const beginEdit = () => {
-    if (!canEdit) {
-      onActionUnavailable();
-      return;
-    }
-    setFormError(null);
-    setDraft(value);
-    setEditing(true);
-  };
+    const el = rootRef.current;
+    if (!el || document.activeElement === el) return;
+    if (renderedSource.current === value) return;
+    fillNoteEditor(el, value);
+    renderedSource.current = value;
+  }, [value]);
 
   const commit = () => {
-    if (draft.length > NOTES_CELL_MAX) {
-      setFormError(`Cette page dépasse ${NOTES_CELL_MAX} caractères (limite d’une cellule).`);
+    const el = rootRef.current;
+    if (!el || !canEdit) return;
+    const source = readNoteEditor(el);
+    if (source.length > NOTES_CELL_MAX) {
+      setNotice(`Cette page dépasse ${NOTES_CELL_MAX} caractères (limite d’une cellule).`);
       return;
     }
-    setEditing(false);
-    setFormError(null);
-    if (draft !== value) onCommit(draft);
+    setNotice(null);
+    fillNoteEditor(el, source);
+    renderedSource.current = source;
+    if (source !== value) onCommit(source);
   };
 
-  const insertImage = () => {
-    const safe = safeHttpUrl(imageUrl);
-    if (!safe) {
-      setFormError('Image : une URL http(s) seulement. Pas de fichier encodé en base64.');
-      return;
-    }
-    const snippet = `![image](${safe})`;
-    const { start, end } = selectionRef.current;
-    const next = `${draft.slice(0, start)}${snippet}${draft.slice(end)}`;
-    setDraft(next);
-    setImageUrl('');
-    setFormError(null);
-    const caret = start + snippet.length;
-    selectionRef.current = { start: caret, end: caret };
-    requestAnimationFrame(() => {
-      const el = areaRef.current;
+  const pasteImage = async (file: File, range: Range | null) => {
+    setUploading(true);
+    setNotice('Envoi de l’image…');
+    try {
+      const fileId = await uploadNoteImage(file);
+      const el = rootRef.current;
       if (!el) return;
-      el.focus();
-      el.setSelectionRange(caret, caret);
-    });
+      insertNoteChip(el, fileId, range);
+      const source = readNoteEditor(el);
+      if (source.length > NOTES_CELL_MAX) {
+        setNotice(`Cette page dépasse ${NOTES_CELL_MAX} caractères (limite d’une cellule).`);
+        return;
+      }
+      renderedSource.current = source;
+      setNotice(null);
+      onCommit(source);
+    } catch (err: unknown) {
+      setNotice(err instanceof Error ? err.message : 'Envoi de l’image impossible.');
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
-    <article
-      className="notes-page"
-      style={marginStyle}
-      onBlur={(event) => {
-        if (!editing) return;
-        const next = event.relatedTarget;
-        if (next instanceof Node && event.currentTarget.contains(next)) return;
-        commit();
-      }}
-    >
+    <article className="notes-page" style={marginStyle}>
       <div className="notes-page-bar">
         <span className="notes-page-label">Page {pageIndex + 1}</span>
-        {editing && canEdit && (
-          <form
-            className="notes-image-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              insertImage();
-            }}
-          >
-            <input
-              value={imageUrl}
-              onChange={(event) => setImageUrl(event.target.value)}
-              placeholder="https://…/image.png"
-              aria-label="URL de l’image"
-              disabled={busy}
-            />
-            <button type="submit" disabled={busy} onMouseDown={(event) => event.preventDefault()}>
-              <ImagePlus size={14} />
-              Insérer
-            </button>
-          </form>
-        )}
-        {canEdit && !editing && (
-          <button type="button" className="notes-text-btn" onClick={beginEdit} disabled={busy}>
-            <Pencil size={14} />
-            Modifier
-          </button>
-        )}
         {canEdit && (
           <button
             type="button"
             className="notes-text-btn notes-text-btn-danger"
-            disabled={busy}
-            onMouseDown={(event) => event.preventDefault()}
+            disabled={busy || uploading}
             onClick={onDelete}
           >
             <Trash2 size={14} />
@@ -189,42 +157,59 @@ function NotePage({
         )}
       </div>
 
-      {editing ? (
-        <textarea
-          ref={areaRef}
-          className="notes-editor"
-          value={draft}
-          spellCheck
-          aria-label={`Texte de la page ${pageIndex + 1}`}
-          onChange={(event) => {
-            setDraft(event.target.value);
-            rememberSelection();
-          }}
-          onSelect={rememberSelection}
-          onKeyUp={rememberSelection}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault();
-              setDraft(value);
-              setEditing(false);
-              setFormError(null);
-            }
-          }}
-        />
-      ) : (
-        <div
-          className="notes-rendered"
-          onClick={(event) => {
-            const target = event.target;
-            if (target instanceof HTMLElement && target.closest('a, img, button')) return;
-            beginEdit();
-          }}
-        >
-          <NoteRichText source={value} />
-        </div>
-      )}
+      <div
+        ref={rootRef}
+        className="notes-editor"
+        role="textbox"
+        aria-multiline="true"
+        aria-label={`Texte de la page ${pageIndex + 1}`}
+        contentEditable={canEdit ? 'true' : 'false'}
+        spellCheck
+        suppressContentEditableWarning
+        onClick={(event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          const chip = target.closest<HTMLElement>('[data-note-image-id]');
+          const fileId = chip?.dataset.noteImageId;
+          if (!fileId) return;
+          event.preventDefault();
+          onOpenImage(fileId);
+        }}
+        onBlur={(event) => {
+          const next = event.relatedTarget;
+          if (next instanceof Node && event.currentTarget.contains(next)) return;
+          commit();
+        }}
+        onPaste={(event) => {
+          if (!canEdit) {
+            event.preventDefault();
+            onActionUnavailable();
+            return;
+          }
+          const image = clipboardImage(event.clipboardData);
+          if (image) {
+            event.preventDefault();
+            const range = captureEditorRange(event.currentTarget);
+            void pasteImage(image, range);
+            return;
+          }
+          const text = event.clipboardData.getData('text/plain');
+          event.preventDefault();
+          if (text) insertPlainText(event.currentTarget, text);
+          event.currentTarget.classList.toggle(
+            'is-empty',
+            readNoteEditor(event.currentTarget).trim() === '',
+          );
+        }}
+        onInput={(event) => {
+          event.currentTarget.classList.toggle(
+            'is-empty',
+            readNoteEditor(event.currentTarget).trim() === '',
+          );
+        }}
+      />
 
-      {formError && <p className="notes-form-error">{formError}</p>}
+      {notice && <p className={uploading ? 'notes-form-status' : 'notes-form-error'}>{notice}</p>}
       <div className="notes-margin" data-notes-margin={NOTES_PAGE_MARGIN_LINES} aria-hidden="true" />
     </article>
   );
@@ -235,10 +220,12 @@ export function Notes({ tabs, canEdit, onSave, onActionUnavailable }: NotesProps
   const [selected, setSelected] = useState(0);
   const [busy, setBusy] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
+  const [lightboxId, setLightboxId] = useState<string | null>(null);
   const tabsRef = useRef(tabs);
   const onSaveRef = useRef(onSave);
   const chainRef = useRef(Promise.resolve());
   const pendingRef = useRef(0);
+  const closeLightbox = useCallback(() => setLightboxId(null), []);
 
   useEffect(() => {
     onSaveRef.current = onSave;
@@ -288,7 +275,7 @@ export function Notes({ tabs, canEdit, onSave, onActionUnavailable }: NotesProps
 
   const addTab = () => {
     const name = 'Nouvel onglet';
-    void apply((current) => [...current, { name, pages: [''] }]).then((saved) => {
+    void apply((currentTabs) => [...currentTabs, { name, pages: [''] }]).then((saved) => {
       if (saved) setSelected(Math.max(0, tabsRef.current.length - 1));
     });
   };
@@ -311,9 +298,6 @@ export function Notes({ tabs, canEdit, onSave, onActionUnavailable }: NotesProps
     void apply((curr) => curr.filter((_, i) => i !== index));
   };
 
-  const example =
-    'Lien automatique : https://peti6inge.github.io/No-E-Planner/\nImage : ![favicon](https://peti6inge.github.io/No-E-Planner/favicon.svg)';
-
   return (
     <div className="notes-root">
       <aside className="notes-tabs" aria-label="Onglets de notes">
@@ -332,27 +316,13 @@ export function Notes({ tabs, canEdit, onSave, onActionUnavailable }: NotesProps
           <Plus size={14} />
           Onglet
         </button>
-        <p className="notes-format-hint">
-          Feuille NOTES : une ligne par onglet, une colonne par page. Images par URL, pas en base64.
-        </p>
       </aside>
 
       <div className="notes-scroll">
         {viewTabs.length === 0 ? (
-          <div className="notes-stack">
-            <div className="notes-empty">
-              <p>Aucun onglet. La feuille reste vide tant que vous n’en ajoutez pas — le Google Doc n’est pas importé.</p>
-              <p>Ajoutez un onglet (No-E, BLENDER…). Chaque page s’agrandit avec le texte, plus {NOTES_PAGE_MARGIN_LINES} lignes.</p>
-            </div>
-            <article className="notes-page" style={marginStyle}>
-              <div className="notes-page-bar">
-                <span className="notes-page-label">Aperçu du format (non enregistré)</span>
-              </div>
-              <div className="notes-rendered notes-rendered-static">
-                <NoteRichText source={example} />
-              </div>
-              <div className="notes-margin" data-notes-margin={NOTES_PAGE_MARGIN_LINES} aria-hidden="true" />
-            </article>
+          <div className="notes-empty">
+            <p>Aucun onglet. La feuille reste vide tant que vous n’en ajoutez pas — le Google Doc n’est pas importé.</p>
+            <p>Ajoutez un onglet (No-E, BLENDER…). Chaque page s’agrandit avec le texte, plus {NOTES_PAGE_MARGIN_LINES} lignes.</p>
           </div>
         ) : current ? (
           <div className="notes-stack">
@@ -391,6 +361,7 @@ export function Notes({ tabs, canEdit, onSave, onActionUnavailable }: NotesProps
                 canEdit={canEdit}
                 busy={busy}
                 onActionUnavailable={onActionUnavailable}
+                onOpenImage={setLightboxId}
                 onCommit={(text) => {
                   const index = selected;
                   void apply((curr) =>
@@ -435,6 +406,8 @@ export function Notes({ tabs, canEdit, onSave, onActionUnavailable }: NotesProps
           </div>
         ) : null}
       </div>
+
+      {lightboxId && <NoteLightbox fileId={lightboxId} onClose={closeLightbox} />}
     </div>
   );
 }
