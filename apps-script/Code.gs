@@ -35,7 +35,8 @@ function onFormSubmitTrigger(e) {
  *
  * Déploiement (une fois) :
  * 1. Ouvre le classeur PLANNING → Extensions → Apps Script
- * 2. Colle ce fichier (remplace Code.gs)
+ * 2. Colle ce fichier (remplace Code.gs) et apps-script/appsscript.json
+ *    (scopes Drive + Sheets, sinon DriveApp.getFileById est refusé)
  * 3. Déployer → Nouveau déploiement → Type : Application Web
  *    - Exécuter en tant que : Moi
  *    - Qui peut y accéder : Tout le monde

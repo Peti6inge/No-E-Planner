@@ -7,13 +7,29 @@ Proxy lecture/écriture du classeur PLANNING (onglets `PLANNING`, `BRAINSTORM` e
 1. Ouvre le [classeur PLANNING](https://docs.google.com/spreadsheets/d/1yLNRF8ylX5qUdvpPVgzmtucmd1AISJ18rfOhEfbo0Ak/edit).
 2. **Extensions → Apps Script**.
 3. Colle le contenu de [`Code.gs`](./Code.gs) (remplace le fichier par défaut).
-4. **Déployer → Nouveau déploiement** :
+4. Colle le manifeste [`appsscript.json`](./appsscript.json) — voir [Manifeste](#manifeste-scopes) ci-dessous. Sans les scopes Drive, `DriveApp.getFileById` répond « Vous n'êtes pas autorisé à appeler DriveApp.getFileById ».
+5. **Déployer → Nouveau déploiement** :
    - Type : **Application Web**
    - Description : `no-e-planner-bridge`
    - Exécuter en tant que : **Moi**
    - Qui peut y accéder : **Tout le monde**
-5. Autorise le compte Google quand Google le demande.
-6. Copie l’URL qui se termine par `/exec`.
+6. Autorise le compte Google quand Google le demande.
+7. Copie l’URL qui se termine par `/exec`.
+
+## Manifeste (scopes)
+
+Le Web App n’hérite pas tout seul du droit Drive. Il faut le déclarer dans le manifeste, **puis** publier une nouvelle version et ré-autoriser.
+
+1. Éditeur Apps Script → **Paramètres du projet** (engrenage) → cocher **Afficher le fichier manifeste « appsscript.json » dans l’éditeur**.
+2. Ouvrir `appsscript.json` et coller [`appsscript.json`](./appsscript.json). Scopes :
+
+   - `https://www.googleapis.com/auth/spreadsheets` — le classeur
+   - `https://www.googleapis.com/auth/drive` — lire et créer les fichiers du dossier `NOTES-IMAGES` (`drive.file` ne suffit pas : le classeur existe déjà, `DriveApp.getFileById` a besoin de `drive`)
+   - `https://www.googleapis.com/auth/script.storage` — mémoriser l’id du dossier dans les propriétés du script
+
+3. Enregistrer.
+4. **Déployer → Gérer les déploiements → ✎ → Nouvelle version**.
+5. Ré-autoriser : dans l’éditeur, exécuter une fois une fonction qui touche Drive (`uploadNoteImage` ou le chemin de `getNoteImage`), **ou** rouvrir le flux OAuth du déploiement quand Google le redemande. Une nouvelle version sans cette autorisation laisse l’erreur « Vous n'êtes pas autorisé à appeler DriveApp.getFileById ».
 
 ## Brancher le front
 
@@ -45,7 +61,7 @@ Le collage (Ctrl/Cmd+V) envoie l’image au bridge, action `uploadNoteImage` (`m
 
 Le clic sur `(image)` appelle `getNoteImage` (`fileId`) et affiche le blob dans une fenêtre.
 
-**Nouvelle version de déploiement requise** après cette mise à jour : le script demande l’accès Drive. Déployer → Gérer les déploiements → ✎ → Nouvelle version, puis accepter l’autorisation.
+Après un collage qui échoue avec « Vous n'êtes pas autorisé à appeler DriveApp.getFileById » : le manifeste ci-dessus n’est pas encore sur le déploiement. Coller les scopes, nouvelle version, puis ré-autoriser.
 
 ## Après une modif du script
 
