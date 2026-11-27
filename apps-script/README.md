@@ -39,6 +39,14 @@ Relance le workflow **Deploy to GitHub Pages**.
 
 Les secrets OAuth (`VITE_GOOGLE_CLIENT_ID`, `VITE_GOOGLE_API_KEY`) ne sont plus nécessaires si le bridge est défini.
 
+## Images collées dans les notes
+
+Le collage (Ctrl/Cmd+V) envoie l’image au bridge, action `uploadNoteImage` (`mimeType`, `dataBase64`). Le script crée si besoin le dossier **`NOTES-IMAGES`** à côté du classeur PLANNING et y dépose un fichier privé (pas de lien public). La cellule ne garde que le marqueur `{{img:FILE_ID}}`.
+
+Le clic sur `(image)` appelle `getNoteImage` (`fileId`) et affiche le blob dans une fenêtre.
+
+**Nouvelle version de déploiement requise** après cette mise à jour : le script demande l’accès Drive. Déployer → Gérer les déploiements → ✎ → Nouvelle version, puis accepter l’autorisation.
+
 ## Après une modif du script
 
 **Déployer → Gérer les déploiements → ✎ → Nouvelle version** (sinon l’URL `/exec` sert encore l’ancienne version).

@@ -964,9 +964,13 @@ export const syncReplaceBrainstorm = async (nodes: BrainstormNode[]): Promise<vo
 
 /**
  * Notes — lecture / écriture de la feuille NOTES.
- * Format des cellules : src/lib/notesFormat.ts (texte, liens auto, images par URL).
+ * Format des cellules : src/lib/notesFormat.ts
+ * (texte, liens auto, images Drive {{img:FILE_ID}}).
  * Ligne = onglet, colonne A = nom, colonnes suivantes = pages.
  */
+
+/** Taille max d’une image collée, avant envoi au dossier Drive. */
+export const NOTE_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 type NotesSheetMeta = {
   title: string;
@@ -977,9 +981,9 @@ type NotesSheetMeta = {
 
 const explainNotesBridge = (err: unknown): Error => {
   const message = err instanceof Error ? err.message : String(err);
-  if (/Action inconnue/i.test(message) && /Notes/i.test(message)) {
+  if (/Action inconnue/i.test(message) && /Note/i.test(message)) {
     return new Error(
-      'Le bridge Apps Script ne gère pas encore les notes. Remplace Code.gs dans le classeur (Extensions → Apps Script) par apps-script/Code.gs, puis Déployer → Gérer les déploiements → nouvelle version.',
+      'Le bridge Apps Script ne gère pas encore cette action notes. Remplace Code.gs dans le classeur (Extensions → Apps Script) par apps-script/Code.gs, puis Déployer → Gérer les déploiements → nouvelle version. Le script redemandera l’accès Drive pour les images collées.',
     );
   }
   return err instanceof Error ? err : new Error(message);
@@ -1149,5 +1153,76 @@ export const syncReplaceNotes = async (tabs: NoteTab[]): Promise<void> => {
     console.error('syncReplaceNotes failed', err);
     if (err instanceof Error && /feuille NOTES|caractères/.test(err.message)) throw err;
     throw new Error(formatSheetWriteError(err, 'Impossible d’enregistrer les notes dans Google Sheets'));
+  }
+};
+
+const blobToBase64 = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(new Error('Lecture de l’image impossible.'));
+    reader.readAsDataURL(blob);
+  });
+
+/**
+ * Envoie une image collée au dossier Drive NOTES-IMAGES.
+ * La cellule ne reçoit ensuite que {{img:FILE_ID}}.
+ */
+export const uploadNoteImage = async (file: Blob): Promise<string> => {
+  if (!BRIDGE_CONFIGURED) {
+    throw new Error(
+      'Le collage d’images passe par le bridge Apps Script. Définissez VITE_SHEETS_BRIDGE_URL.',
+    );
+  }
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Le presse-papiers ne contient pas une image.');
+  }
+  if (file.size > NOTE_IMAGE_MAX_BYTES) {
+    throw new Error('Image trop lourde (8 Mo maximum).');
+  }
+  try {
+    const dataBase64 = await blobToBase64(file);
+    const result = await callSheetsBridge<{ ok: true; fileId?: string }>('uploadNoteImage', {
+      mimeType: file.type,
+      dataBase64,
+    });
+    const fileId = String(result.fileId ?? '');
+    if (!/^[A-Za-z0-9_-]+$/.test(fileId)) {
+      throw new Error('Le bridge n’a pas renvoyé d’identifiant Drive.');
+    }
+    return fileId;
+  } catch (err) {
+    throw explainNotesBridge(err);
+  }
+};
+
+/** Charge le blob privé d’une image Drive pour la lightbox. */
+export const fetchNoteImage = async (fileId: string): Promise<Blob> => {
+  if (!BRIDGE_CONFIGURED) {
+    throw new Error(
+      'L’affichage des images passe par le bridge Apps Script. Définissez VITE_SHEETS_BRIDGE_URL.',
+    );
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(fileId)) {
+    throw new Error('Identifiant d’image invalide.');
+  }
+  try {
+    const result = await callSheetsBridge<{ ok: true; mimeType?: string; dataBase64?: string }>(
+      'getNoteImage',
+      { fileId },
+    );
+    const dataBase64 = String(result.dataBase64 ?? '');
+    if (!dataBase64) throw new Error('Image vide.');
+    const binary = atob(dataBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    const mimeType = String(result.mimeType || 'image/png');
+    return new Blob([bytes], { type: mimeType });
+  } catch (err) {
+    throw explainNotesBridge(err);
   }
 };

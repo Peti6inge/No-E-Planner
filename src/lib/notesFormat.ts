@@ -13,9 +13,10 @@
  *   sauts de ligne conservés
  *   https://…                         → lien
  *   [libellé](https://…)              → lien
- *   ![légende](https://…)             → image inline
- *   <img src="https://…" alt="…">     → image inline
- * Les images sont des URLs http(s). Pas de base64 ni de data:.
+ *   {{img:FILE_ID}}                   → image Drive (collage). Pas d’URL publique,
+ *                                       pas de base64 dans la cellule.
+ *   ![légende](https://…)             → ancienne image par URL, encore affichée
+ *   <img src="https://…" alt="…">     → idem
  */
 
 export const NOTES_SHEET_TITLES = ['NOTES', 'Notes', 'notes'] as const;
@@ -38,10 +39,18 @@ export type NoteTab = {
   pages: string[];
 };
 
+/** Marqueur court d’une image stockée dans le dossier Drive des notes. */
+export const noteImageMarker = (fileId: string): string => `{{img:${fileId}}}`;
+
+export const isNoteImageFileId = (fileId: string): boolean => /^[A-Za-z0-9_-]+$/.test(fileId);
+
+const DRIVE_IMAGE_MARKER = /^\{\{img:([A-Za-z0-9_-]+)\}\}/;
+
 export type NoteToken =
   | { type: 'text'; text: string }
   | { type: 'link'; href: string; text: string }
-  | { type: 'image'; src: string; alt: string };
+  | { type: 'image'; src: string; alt: string }
+  | { type: 'driveImage'; fileId: string };
 
 const norm = (value: string): string =>
   value
@@ -145,6 +154,17 @@ export const parseNoteCell = (source: string): NoteToken[] => {
   };
 
   while (i < source.length) {
+    if (source.startsWith('{{img:', i)) {
+      const marker = DRIVE_IMAGE_MARKER.exec(source.slice(i));
+      if (marker) {
+        pushText(i);
+        tokens.push({ type: 'driveImage', fileId: marker[1] });
+        i += marker[0].length;
+        textStart = i;
+        continue;
+      }
+    }
+
     if (source.slice(i, i + 4).toLowerCase() === '<img') {
       const close = source.indexOf('>', i);
       if (close >= 0) {

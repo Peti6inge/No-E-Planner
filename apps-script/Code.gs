@@ -31,7 +31,7 @@ function onFormSubmitTrigger(e) {
 }
 
 /**
- * Bridge Sheets pour No-E-Planner (PLANNING, BRAINSTORM, NOTES).
+ * Bridge Sheets pour No-E-Planner (PLANNING, BRAINSTORM, NOTES, images Drive).
  *
  * Déploiement (une fois) :
  * 1. Ouvre le classeur PLANNING → Extensions → Apps Script
@@ -49,6 +49,8 @@ var PLANNING_TITLES = ['PLANNING', 'Planning', 'planning'];
 var BRAINSTORM_TITLES = ['BRAINSTORM', 'Brainstorm', 'brainstorm'];
 var NOTES_TITLES = ['NOTES', 'Notes', 'notes'];
 var NOTES_CELL_MAX = 50000;
+var NOTES_IMAGES_FOLDER = 'NOTES-IMAGES';
+var NOTES_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 function doGet(e) {
   try {
@@ -103,6 +105,10 @@ function dispatch(action, payload) {
     case 'replaceNotes':
       replaceNotes_(payload.values || []);
       return { ok: true };
+    case 'uploadNoteImage':
+      return uploadNoteImage_(payload);
+    case 'getNoteImage':
+      return getNoteImage_(payload);
     default:
       throw new Error('Action inconnue : ' + action);
   }
@@ -251,6 +257,108 @@ function replaceNotes_(values) {
   var writeRange = sheet.getRange(1, 1, rect.length, maxCol);
   writeRange.setNumberFormat('@');
   writeRange.setValues(rect);
+}
+
+function notesImagesFolder_(create) {
+  var props = PropertiesService.getScriptProperties();
+  var stored = props.getProperty('NOTES_IMAGES_FOLDER_ID');
+  if (stored) {
+    try {
+      var existing = DriveApp.getFolderById(stored);
+      if (!existing.isTrashed()) return existing;
+    } catch (err) {
+      // identifiant périmé : on cherche ou on recrée le dossier
+    }
+  }
+
+  var ssFile = DriveApp.getFileById(SPREADSHEET_ID);
+  var parents = ssFile.getParents();
+  var parent = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
+  var found = parent.getFoldersByName(NOTES_IMAGES_FOLDER);
+  if (found.hasNext()) {
+    var folder = found.next();
+    props.setProperty('NOTES_IMAGES_FOLDER_ID', folder.getId());
+    return folder;
+  }
+  if (!create) return null;
+  var created = parent.createFolder(NOTES_IMAGES_FOLDER);
+  props.setProperty('NOTES_IMAGES_FOLDER_ID', created.getId());
+  return created;
+}
+
+function fileInFolder_(file, folder) {
+  var parents = file.getParents();
+  var folderId = folder.getId();
+  while (parents.hasNext()) {
+    if (parents.next().getId() === folderId) return true;
+  }
+  return false;
+}
+
+function imageMime_(mime) {
+  var normalized = String(mime || '').toLowerCase().split(';')[0].trim();
+  if (normalized === 'image/jpg') normalized = 'image/jpeg';
+  var extensions = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/bmp': 'bmp',
+  };
+  var ext = extensions[normalized];
+  if (!ext) return null;
+  return { mime: normalized, ext: ext };
+}
+
+function uploadNoteImage_(payload) {
+  var spec = imageMime_(payload && payload.mimeType);
+  if (!spec) {
+    throw new Error('Format d’image non accepté (png, jpeg, gif, webp, bmp).');
+  }
+  var dataBase64 = payload && payload.dataBase64 ? String(payload.dataBase64).replace(/\s+/g, '') : '';
+  if (!dataBase64) throw new Error('Image vide.');
+  if (dataBase64.length > 12000000) {
+    throw new Error('Image trop lourde (8 Mo maximum).');
+  }
+
+  var bytes;
+  try {
+    bytes = Utilities.base64Decode(dataBase64);
+  } catch (err) {
+    throw new Error('Image illisible.');
+  }
+  if (!bytes || bytes.length > NOTES_IMAGE_MAX_BYTES) {
+    throw new Error('Image trop lourde (8 Mo maximum).');
+  }
+
+  var folder = notesImagesFolder_(true);
+  var blob = Utilities.newBlob(bytes, spec.mime, 'note-' + new Date().getTime() + '.' + spec.ext);
+  var file = folder.createFile(blob);
+  return { ok: true, fileId: file.getId() };
+}
+
+function getNoteImage_(payload) {
+  var fileId = payload && payload.fileId ? String(payload.fileId) : '';
+  if (!/^[A-Za-z0-9_-]+$/.test(fileId)) {
+    throw new Error('Identifiant d’image invalide.');
+  }
+  var folder = notesImagesFolder_(false);
+  if (!folder) throw new Error('Image introuvable.');
+  var file;
+  try {
+    file = DriveApp.getFileById(fileId);
+  } catch (err) {
+    throw new Error('Image introuvable.');
+  }
+  if (file.isTrashed() || !fileInFolder_(file, folder)) {
+    throw new Error('Image introuvable.');
+  }
+  var blob = file.getBlob();
+  return {
+    ok: true,
+    mimeType: blob.getContentType() || 'application/octet-stream',
+    dataBase64: Utilities.base64Encode(blob.getBytes()),
+  };
 }
 
 function isInt_(n) {
